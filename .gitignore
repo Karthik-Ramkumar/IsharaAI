@@ -1,25 +1,14 @@
-# Python
+.venv/
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
+*.pyc
+*.pyo
+*.pyd
 .Python
 env/
 venv/
-*.egg-info/
-
-# Data
-data/raw/
-data/processed/
-models/saved_models/
-*.h5
-*.pkl
-
-# IDE
-.vscode/
-.idea/
-*.swp
-
-# OS
+ENV/
+env.bak/
+venv.bak/
 .DS_Store
-Thumbs.db
+crash_log.txt
+*.log
