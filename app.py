@@ -29,6 +29,7 @@ from src.pipelines.text_to_isl import TextToISLPipeline
 from src.pipelines.speech_to_isl import SpeechToISLPipeline
 from src.core.text_to_speech import TextToSpeech, PYTTSX3_AVAILABLE
 from src.utils.image_utils import ISLImageCache
+from src.core.autocorrect import AutoCorrect
 
 # Setup logging
 logging.basicConfig(level=config.LOG_LEVEL, format=config.LOG_FORMAT)
@@ -78,6 +79,48 @@ except Exception as e:
 ISL_ALPHABET = ['1','2','3','4','5','6','7','8','9'] + list(string.ascii_uppercase)
 
 
+class ScrollableFrame(ttk.Frame):
+    """A scrollable frame container for horizontal scrolling."""
+    def __init__(self, container, height=100, *args, **kwargs):
+        super().__init__(container, *args, **kwargs)
+        
+        # Create canvas and scrollbar
+        self.canvas = tk.Canvas(self, height=height, bg=config.COLORS['bg_primary'], highlightthickness=0)
+        self.scrollbar = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        
+        # Create scrollable frame
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        
+        # Configure scroll logic
+        self.scrollable_frame.bind("<Configure>", self._on_frame_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        
+        # Create window inside canvas
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        
+        # Link scrollbar to canvas
+        self.canvas.configure(xscrollcommand=self.scrollbar.set)
+        
+        # Pack canvas
+        self.canvas.pack(side="top", fill="both", expand=True)
+
+    def _on_frame_configure(self, event):
+        """Update scrollregion and toggle scrollbar visibility."""
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self._toggle_scrollbar()
+
+    def _on_canvas_configure(self, event):
+        """Check if scrollbar is needed on resize."""
+        self._toggle_scrollbar()
+
+    def _toggle_scrollbar(self):
+        """Show scrollbar only if content exceeds visible width."""
+        if self.scrollable_frame.winfo_reqwidth() > self.canvas.winfo_width():
+            self.scrollbar.pack(side="bottom", fill="x")
+        else:
+            self.scrollbar.pack_forget()
+
+
 class ISLTranslatorApp:
     """
     Main application class for ISL Translation System.
@@ -101,6 +144,11 @@ class ISLTranslatorApp:
         self.tts = None
         self.image_cache = None
         
+        # Autocorrect
+        self.autocorrect = AutoCorrect()
+        self.autocorrect_enabled = True
+        self._last_suggestion = None
+        
         # State variables
         self.current_signs = []
         self.current_sign_index = 0
@@ -123,6 +171,18 @@ class ISLTranslatorApp:
         self._last_letter = ""
         self._prediction_buffer = []
         self._debounce_threshold = 12  # frames to hold before accepting
+        
+        # Translator tab state (for split-screen)
+        self.trans_is_camera_running = False
+        self._trans_detected_word = ""
+        self._trans_current_letter = ""
+        self._trans_last_letter = ""
+        self._trans_letter_hold_count = 0
+        self._trans_debounce_threshold = 12
+        self._trans_prediction_buffer = []
+        self._trans_signs = []
+        self._trans_sign_index = 0
+        self._trans_is_playing = False
         
         # Build UI
         self._setup_styles()
@@ -228,6 +288,7 @@ class ISLTranslatorApp:
         self.notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
         # Create tabs
+        self._create_translator_tab()  # Split-screen translator (new)
         self._create_text_to_isl_tab()
         self._create_speech_to_isl_tab()
         self._create_isl_to_speech_tab()
@@ -247,6 +308,186 @@ class ISLTranslatorApp:
                                  text="v1.0 | Professional Edition",
                                  style='Status.TLabel')
         version_label.pack(side=tk.RIGHT)
+    
+    def _create_translator_tab(self):
+        """Create the unified Translator tab with ISL→Text on left and Text/Speech→ISL on right."""
+        tab = ttk.Frame(self.notebook, padding="15")
+        self.notebook.add(tab, text="◉ Translator")
+        
+        # Main container with two panels
+        main_frame = ttk.Frame(tab)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # ===== LEFT PANEL: ISL → Text/Speech =====
+        left_panel = ttk.Frame(main_frame, style='Card.TFrame')
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+        
+        # Left header
+        left_header = ttk.Label(left_panel, text="ISL → Text/Speech", 
+                               font=('Segoe UI', 13, 'bold'),
+                               foreground=config.COLORS['accent'])
+        left_header.pack(pady=(10, 10))
+        
+        # Controls
+        left_control_frame = ttk.Frame(left_panel)
+        left_control_frame.pack(pady=8)
+        
+        self.trans_camera_btn = ttk.Button(left_control_frame, text="◉ Start Camera",
+                                          command=self._toggle_trans_camera)
+        self.trans_camera_btn.pack(side=tk.LEFT, padx=4)
+        
+        trans_clear_btn = ttk.Button(left_control_frame, text="✕ Clear",
+                                    command=self._clear_trans_word)
+        trans_clear_btn.pack(side=tk.LEFT, padx=4)
+        
+        trans_speak_btn = ttk.Button(left_control_frame, text="♪ Speak",
+                                    command=self._speak_trans_word)
+        trans_speak_btn.pack(side=tk.LEFT, padx=4)
+        
+        trans_space_btn = ttk.Button(left_control_frame, text="[ ] Space",
+                                    command=self._add_trans_space)
+        trans_space_btn.pack(side=tk.LEFT, padx=4)
+        
+        trans_backspace_btn = ttk.Button(left_control_frame, text="⌫ Back",
+                                       command=self._trans_backspace)
+        trans_backspace_btn.pack(side=tk.LEFT, padx=4)
+        
+        # Camera status
+        self.trans_camera_status_var = tk.StringVar(value="Camera: OFF")
+        trans_status = ttk.Label(left_panel, textvariable=self.trans_camera_status_var,
+                                font=('Segoe UI', 10, 'bold'),
+                                foreground=config.COLORS['warning'])
+        trans_status.pack(pady=5)
+        
+        # Camera canvas
+        trans_cam_container = ttk.Frame(left_panel)
+        trans_cam_container.pack(pady=10)
+        
+        self.trans_camera_canvas = tk.Canvas(trans_cam_container, width=480, height=480,
+                                            bg=config.COLORS['camera_bg'],
+                                            highlightthickness=3,
+                                            highlightbackground=config.COLORS['accent'])
+        self.trans_camera_canvas.pack()
+        
+        # Detected word display
+        trans_word_card = ttk.Frame(left_panel, style='Card.TFrame')
+        trans_word_card.pack(fill=tk.X, pady=(10, 5), padx=10)
+        
+        ttk.Label(trans_word_card, text="Detected Text:", 
+                 font=('Segoe UI', 11, 'bold')).pack(side=tk.LEFT, padx=(10, 10))
+        
+        self.trans_word_var = tk.StringVar(value="(No text yet)")
+        trans_word_label = ttk.Label(trans_word_card, textvariable=self.trans_word_var,
+                                     font=('Segoe UI', 14, 'bold'),
+                                     foreground=config.COLORS['accent'])
+        trans_word_label.pack(side=tk.LEFT, padx=(0, 10), pady=10)
+        
+        # Autocorrect suggestion for translator
+        trans_suggestion_card = ttk.Frame(left_panel, style='Card.TFrame')
+        trans_suggestion_card.pack(fill=tk.X, pady=(5, 5), padx=10)
+        
+        trans_suggestion_frame = ttk.Frame(trans_suggestion_card)
+        trans_suggestion_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.trans_suggestion_var = tk.StringVar(value="")
+        self.trans_suggestion_label = ttk.Label(trans_suggestion_frame,
+                                                textvariable=self.trans_suggestion_var,
+                                                font=('Segoe UI', 9),
+                                                foreground=config.COLORS['warning'])
+        self.trans_suggestion_label.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.trans_accept_suggestion_btn = ttk.Button(trans_suggestion_frame,
+                                                      text="✓ Accept",
+                                                      command=self._accept_trans_suggestion,
+                                                      state=tk.DISABLED)
+        self.trans_accept_suggestion_btn.pack(side=tk.LEFT, padx=5)
+        
+        self._trans_last_suggestion = None
+        
+        # ===== VERTICAL DIVIDER =====
+        divider = ttk.Separator(main_frame, orient='vertical')
+        divider.pack(side=tk.LEFT, fill=tk.Y, padx=8)
+        
+        # ===== RIGHT PANEL: Text/Speech → ISL =====
+        right_panel = ttk.Frame(main_frame, style='Card.TFrame')
+        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
+        
+        # Right header
+        right_header = ttk.Label(right_panel, text="Text/Speech → ISL", 
+                                font=('Segoe UI', 13, 'bold'),
+                                foreground=config.COLORS['accent'])
+        right_header.pack(pady=(10, 8))
+        
+        # === Text Input Section ===
+        input_frame = ttk.Frame(right_panel)
+        input_frame.pack(fill=tk.X, pady=8, padx=10)
+        
+        ttk.Label(input_frame, text="Enter text:", font=('Segoe UI', 10, 'bold')).pack(anchor=tk.W, pady=(0,5))
+        
+        input_row = ttk.Frame(input_frame)
+        input_row.pack(fill=tk.X)
+        
+        self.trans_text_input = ttk.Entry(input_row, width=30, font=('Segoe UI', 11))
+        self.trans_text_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        self.trans_text_input.bind('<Return>', lambda e: self._translate_trans_text())
+        
+        trans_translate_btn = ttk.Button(input_row, text="→ Translate",
+                                        command=self._translate_trans_text)
+        trans_translate_btn.pack(side=tk.LEFT)
+        
+        # === OR Divider ===
+        or_label = ttk.Label(right_panel, text="─── OR ───", 
+                            font=('Segoe UI', 9),
+                            foreground=config.COLORS['text_secondary'])
+        or_label.pack(pady=8)
+        
+        # === Record Section ===
+        self.trans_record_btn = ttk.Button(right_panel, text="● Record Speech",
+                                          command=self._start_trans_recording)
+        self.trans_record_btn.pack(pady=5)
+        
+        # Recognized text display
+        self.trans_speech_text_var = tk.StringVar(value="Type text or record speech...")
+        trans_speech_label = ttk.Label(right_panel, textvariable=self.trans_speech_text_var,
+                                      font=('Segoe UI', 10),
+                                      foreground=config.COLORS['text_secondary'],
+                                      wraplength=280)
+        trans_speech_label.pack(pady=8)
+        
+        # Sign display canvas
+        trans_sign_container = ttk.Frame(right_panel)
+        trans_sign_container.pack(pady=10)
+        
+        self.trans_sign_canvas = tk.Canvas(trans_sign_container, width=200, height=200,
+                                          bg=config.COLORS['bg_primary'],
+                                          highlightthickness=3,
+                                          highlightbackground=config.COLORS['accent'])
+        self.trans_sign_canvas.pack()
+        
+        # Sign grid (scrollable)
+        self.trans_sign_grid_container = ScrollableFrame(right_panel, height=65)
+        self.trans_sign_grid_container.pack(fill=tk.X, pady=8, padx=10)
+        self.trans_sign_grid = self.trans_sign_grid_container.scrollable_frame
+        
+        # === Controls: Previous/Play/Next ===
+        trans_control_frame = ttk.Frame(right_panel)
+        trans_control_frame.pack(pady=10)
+        
+        self.trans_prev_btn = ttk.Button(trans_control_frame, text="◀ Prev",
+                                        command=self._trans_prev_sign)
+        self.trans_prev_btn.pack(side=tk.LEFT, padx=4)
+        
+        self.trans_play_btn = ttk.Button(trans_control_frame, text="▶ Play",
+                                        command=self._toggle_trans_play)
+        self.trans_play_btn.pack(side=tk.LEFT, padx=4)
+        
+        self.trans_next_btn = ttk.Button(trans_control_frame, text="Next ▶",
+                                        command=self._trans_next_sign)
+        self.trans_next_btn.pack(side=tk.LEFT, padx=4)
+        
+        trans_speak_isl_btn = ttk.Button(trans_control_frame, text="♪ Speak",
+                                        command=self._speak_trans_text)
+        trans_speak_isl_btn.pack(side=tk.LEFT, padx=8)
     
     def _create_text_to_isl_tab(self):
         """Create the Text → ISL tab."""
@@ -429,6 +670,11 @@ class ISLTranslatorApp:
                               command=self._add_space_to_word)
         space_btn.pack(side=tk.LEFT, padx=8)
         
+        # Add Backspace button
+        backspace_btn = ttk.Button(control_frame, text="⌫ Backspace",
+                                   command=self._backspace_word)
+        backspace_btn.pack(side=tk.LEFT, padx=8)
+        
         # Add Exit button
         exit_btn = ttk.Button(control_frame, text="✕ Exit App",
                              command=self._quit_app,
@@ -437,6 +683,8 @@ class ISLTranslatorApp:
 
         # Bind space key
         self.root.bind('<space>', self._add_space_to_word)
+        # Bind backspace key
+        self.root.bind('<BackSpace>', self._backspace_word)
 
         # Status bar
         status_frame = ttk.Frame(tab)
@@ -478,6 +726,36 @@ class ISLTranslatorApp:
                                   font=('Segoe UI', 15, 'bold'),
                                   foreground=config.COLORS['accent'])
         detected_label.pack(side=tk.LEFT)
+        
+        # Autocorrect suggestion panel
+        suggestion_card = ttk.Frame(tab, style='Card.TFrame')
+        suggestion_card.pack(fill=tk.X, pady=(10, 0))
+        
+        suggestion_frame = ttk.Frame(suggestion_card)
+        suggestion_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        # Autocorrect toggle
+        self.autocorrect_var = tk.BooleanVar(value=True)
+        autocorrect_check = ttk.Checkbutton(suggestion_frame,
+                                           text="✓ Auto-correct",
+                                           variable=self.autocorrect_var,
+                                           command=self._toggle_autocorrect)
+        autocorrect_check.pack(side=tk.LEFT, padx=(0, 20))
+        
+        # Suggestion label
+        self.suggestion_var = tk.StringVar(value="")
+        self.suggestion_label = ttk.Label(suggestion_frame,
+                                         textvariable=self.suggestion_var,
+                                         font=('Segoe UI', 10),
+                                         foreground=config.COLORS['warning'])
+        self.suggestion_label.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Accept suggestion button (hidden by default)
+        self.accept_suggestion_btn = ttk.Button(suggestion_frame,
+                                               text="✓ Accept",
+                                               command=self._accept_suggestion,
+                                               state=tk.DISABLED)
+        self.accept_suggestion_btn.pack(side=tk.LEFT, padx=5)
     
     def _init_pipelines_async(self):
         """Initialize pipelines in background thread."""
@@ -762,8 +1040,50 @@ class ISLTranslatorApp:
             return
 
         if self._detected_word and not self._detected_word.endswith(" "):
+            # Check and correct the last word before adding space
+            if self.autocorrect_var.get():
+                self._check_last_word()
+            
             self._detected_word += " "
             self.detected_text_var.set(self._detected_word.upper())
+            self._detected_word += " "
+            self.detected_text_var.set(self._detected_word.upper())
+    
+    def _backspace_word(self, event=None):
+        """Remove the last character from the detected word."""
+        # Check if ISL -> Speech tab is active
+        try:
+            current_tab = self.notebook.index("current")
+            if current_tab != 2:  # Assuming ISL -> Speech is the 3rd tab
+                return
+        except tk.TclError:
+            return
+
+        if self._detected_word:
+            self._detected_word = self._detected_word[:-1]
+            self.detected_text_var.set(self._detected_word.upper() if self._detected_word else "(No text yet)")
+    
+    # ===== Helper Methods =====
+    
+    def _init_hand_detector(self):
+        """Initialize MediaPipe HandLandmarker."""
+        try:
+            hand_model_path = os.path.join(os.path.dirname(__file__), "models", "hand_landmarker.task")
+            base_options = python.BaseOptions(model_asset_path=hand_model_path)
+            options = vision.HandLandmarkerOptions(
+                base_options=base_options,
+                num_hands=1,
+                min_hand_detection_confidence=0.5,
+                min_hand_presence_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+            self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
+            logger.info("HandLandmarker initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize hand detector: {e}")
+            messagebox.showerror("Error", f"Failed to initialize hand detector: {e}")
+    
+    # ===== ISL → Speech Tab Methods =====
     
     def _toggle_camera(self):
         """Toggle camera for ISL → Speech."""
@@ -801,23 +1121,12 @@ class ISLTranslatorApp:
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
         
-        # Initialize MediaPipe HandLandmarker (Tasks API)
-        try:
-            hand_model_path = os.path.join(os.path.dirname(__file__), "models", "hand_landmarker.task")
-            base_options = python.BaseOptions(model_asset_path=hand_model_path)
-            options = vision.HandLandmarkerOptions(
-                base_options=base_options,
-                num_hands=1,
-                min_hand_detection_confidence=0.5,
-                min_hand_presence_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
-            logger.info("HandLandmarker initialized")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to initialize hand detector: {e}")
-            self.camera.release()
-            return
+        # Initialize MediaPipe HandLandmarker if not already initialized
+        if not self.hand_landmarker:
+            self._init_hand_detector()
+            if not self.hand_landmarker:
+                self.camera.release()
+                return
         
         # Reset detection state
         self._detected_word = ""
@@ -1130,6 +1439,400 @@ class ISLTranslatorApp:
         word = self._detected_word
         if word and self.tts:
             self.tts.speak_async(word)
+    
+    # ===== TRANSLATOR TAB METHODS =====
+    
+    def _toggle_trans_camera(self):
+        """Toggle camera for translator tab."""
+        if self.trans_is_camera_running:
+            self._stop_trans_camera()
+        else:
+            self._start_trans_camera()
+    
+    def _start_trans_camera(self):
+        """Start camera for translator tab."""
+        if not OPENCV_AVAILABLE or not MEDIAPIPE_AVAILABLE or not KERAS_MODEL_AVAILABLE:
+            messagebox.showerror("Error", "Camera detection requires OpenCV, MediaPipe, and TensorFlow")
+            return
+        
+        if not self.camera:
+            self.camera = cv2.VideoCapture(config.CAMERA_INDEX)
+        
+        if not self.hand_landmarker and MEDIAPIPE_AVAILABLE:
+            self._init_hand_detector()
+        
+        self.trans_is_camera_running = True
+        self.trans_camera_btn.config(text="◉ Stop Camera")
+        self.trans_camera_status_var.set("Camera: ACTIVE")
+        self._trans_camera_loop()
+    
+    def _stop_trans_camera(self):
+        """Stop camera for translator tab."""
+        self.trans_is_camera_running = False
+        self.trans_camera_btn.config(text="◉ Start Camera")
+        self.trans_camera_status_var.set("Camera: OFF")
+    
+    def _trans_camera_loop(self):
+        """Camera loop for translator tab."""
+        if not self.trans_is_camera_running or not self.camera:
+            return
+        
+        ret, frame = self.camera.read()
+        if ret:
+            # Flip for mirror effect
+            frame = cv2.flip(frame, 1)
+            
+            # Convert to RGB for MediaPipe
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            detected_letter = None
+            confidence = 0.0
+            
+            # Detect and process hand
+            if self.hand_landmarker:
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                detection_result = self.hand_landmarker.detect(mp_image)
+                
+                if detection_result.hand_landmarks:
+                    for hand_landmarks in detection_result.hand_landmarks:
+                        # Draw landmarks on frame
+                        self._draw_hand_landmarks(rgb_frame, hand_landmarks)
+                        
+                        if isl_model is not None:
+                            # ML Model Prediction
+                            landmark_list = self._calc_landmark_list(rgb_frame, hand_landmarks)
+                            processed_landmarks = self._pre_process_landmarks(landmark_list)
+                            
+                            import pandas as pd
+                            df = pd.DataFrame(processed_landmarks).transpose()
+                            predictions = isl_model.predict(df, verbose=0)
+                            predicted_class = np.argmax(predictions, axis=1)
+                            confidence = float(np.max(predictions))
+                            
+                            # Higher threshold to prevent false detections
+                            if len(predicted_class) > 0 and confidence > 0.65:
+                                detected_letter = ISL_ALPHABET[predicted_class[0]]
+                        else:
+                            # Fallback Rule-Based Prediction
+                            try:
+                                landmarks = self._extract_landmarks(hand_landmarks)
+                                detected_letter, confidence = self._predict_letter(landmarks)
+                            except Exception as e:
+                                logger.error(f"Heuristic prediction error: {e}")
+            
+            # Process detection with debouncing
+            if detected_letter and confidence > 0.4:
+                self._trans_prediction_buffer.append(detected_letter)
+                if len(self._trans_prediction_buffer) > 5:
+                    self._trans_prediction_buffer.pop(0)
+                
+                if self._trans_prediction_buffer:
+                    from collections import Counter
+                    most_common = Counter(self._trans_prediction_buffer).most_common(1)[0]
+                    detected = most_common[0]
+                    
+                    self._trans_current_letter = detected
+                    
+                    if detected == self._trans_last_letter:
+                        self._trans_letter_hold_count += 1
+                    else:
+                        self._trans_letter_hold_count = 1
+                        self._trans_last_letter = detected
+                    
+                    if self._trans_letter_hold_count >= self._trans_debounce_threshold:
+                        self._trans_detected_word += detected
+                        self.trans_word_var.set(self._trans_detected_word.upper())
+                        if self.tts:
+                            self.tts.speak_async(detected)
+                        self._trans_letter_hold_count = 0
+                        self._trans_prediction_buffer = []
+            
+            # Draw status on frame
+            cv2.putText(rgb_frame, f"Letter: {self._trans_current_letter.upper()}", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(rgb_frame, f"Word: {self._trans_detected_word.upper()}", (10, 60),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            
+            # Display frame
+            img = Image.fromarray(rgb_frame)
+            img = img.resize((480, 480), Image.Resampling.NEAREST)
+            photo = ImageTk.PhotoImage(img)
+            
+            self._trans_camera_photo = photo
+            self.trans_camera_canvas.delete("all")
+            self.trans_camera_canvas.create_image(240, 240, image=photo)
+        
+        self.root.after(16, self._trans_camera_loop)
+    
+    def _clear_trans_word(self):
+        """Clear detected word in translator tab."""
+        self._trans_detected_word = ""
+        self._trans_current_letter = ""
+        self._trans_prediction_buffer = []
+        self._trans_letter_hold_count = 0
+        self.trans_word_var.set("(No text yet)")
+    
+    def _speak_trans_word(self):
+        """Speak detected word in translator tab."""
+        word = self._trans_detected_word
+        if word and self.tts:
+            self.tts.speak_async(word)
+    
+    def _add_trans_space(self):
+        """Add space to detected word in translator tab."""
+        if self._trans_detected_word and not self._trans_detected_word.endswith(" "):
+            # Check and correct the last word before adding space
+            if self.autocorrect_var.get():
+                self._check_trans_last_word()
+            
+            self._trans_detected_word += " "
+            self.trans_word_var.set(self._trans_detected_word.upper())
+    
+    def _trans_backspace(self):
+        """Remove last character from detected word in translator tab."""
+        if self._trans_detected_word:
+            self._trans_detected_word = self._trans_detected_word[:-1]
+            self.trans_word_var.set(self._trans_detected_word.upper() if self._trans_detected_word else "(No text yet)")
+    
+    def _translate_trans_text(self):
+        """Translate text input in translator tab."""
+        text = self.trans_text_input.get().strip()
+        
+        if not text:
+            return
+        
+        if not self.text_to_isl:
+            messagebox.showwarning("Not Ready", "Please wait for initialization")
+            return
+        
+        self._trans_signs = self.text_to_isl.translate(text)
+        self._trans_sign_index = 0
+        
+        if not self._trans_signs:
+            self.trans_speech_text_var.set("No translatable characters")
+            return
+        
+        self.trans_speech_text_var.set(f"Translating: \"{text}\"")
+        self._update_trans_sign_display()
+        self._update_trans_sign_grid()
+    
+    def _start_trans_recording(self):
+        """Start speech recording in translator tab."""
+        self.trans_record_btn.config(state=tk.DISABLED)
+        self.trans_speech_text_var.set("🎤 Listening... Speak now!")
+        
+        def record():
+            try:
+                from src.core.speech_recognition import create_recognizer
+                recognizer = create_recognizer()
+                
+                if not recognizer.is_available:
+                    self.root.after(0, lambda: self.trans_speech_text_var.set("❌ No speech recognizer"))
+                    return
+                
+                text = recognizer.recognize_from_microphone(duration=5)
+                
+                if text:
+                    self.root.after(0, lambda: self.trans_text_input.delete(0, tk.END))
+                    self.root.after(0, lambda: self.trans_text_input.insert(0, text))
+                    self.root.after(0, self._translate_trans_text)
+                else:
+                    self.root.after(0, lambda: self.trans_speech_text_var.set("No speech detected"))
+                    
+            except Exception as e:
+                logger.error(f"Recording error: {e}")
+                self.root.after(0, lambda: self.trans_speech_text_var.set(f"Error: {e}"))
+            finally:
+                self.root.after(0, lambda: self.trans_record_btn.config(state=tk.NORMAL))
+        
+        threading.Thread(target=record, daemon=True).start()
+    
+    def _update_trans_sign_display(self):
+        """Update sign display in translator tab."""
+        if not self._trans_signs or self._trans_sign_index >= len(self._trans_signs):
+            return
+        
+        sign = self._trans_signs[self._trans_sign_index]
+        
+        if sign['image']:
+            img = sign['image'].copy()
+            img = img.resize((200, 200), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._trans_sign_photo = photo
+            
+            self.trans_sign_canvas.delete("all")
+            self.trans_sign_canvas.create_image(100, 100, image=photo)
+    
+    def _update_trans_sign_grid(self):
+        """Update sign grid in translator tab."""
+        for widget in self.trans_sign_grid.winfo_children():
+            widget.destroy()
+        
+        if not self._trans_signs:
+            return
+        
+        for i, sign in enumerate(self._trans_signs):
+            frame = ttk.Frame(self.trans_sign_grid)
+            frame.pack(side=tk.LEFT, padx=2)
+            
+            if sign['image']:
+                thumb = sign['image'].copy()
+                thumb = thumb.resize((40, 40), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(thumb)
+                
+                label = tk.Label(frame, image=photo,
+                               highlightthickness=2 if i == self._trans_sign_index else 0,
+                               highlightbackground=config.COLORS['accent'] if i == self._trans_sign_index else 'white')
+                label.image = photo
+                label.pack()
+            
+            char_label = ttk.Label(frame, text=sign['char'].upper())
+            char_label.pack()
+    
+    def _trans_prev_sign(self):
+        """Show previous sign in translator tab."""
+        if self._trans_signs and self._trans_sign_index > 0:
+            self._trans_sign_index -= 1
+            self._update_trans_sign_display()
+            self._update_trans_sign_grid()
+    
+    def _trans_next_sign(self):
+        """Show next sign in translator tab."""
+        if self._trans_signs and self._trans_sign_index < len(self._trans_signs) - 1:
+            self._trans_sign_index += 1
+            self._update_trans_sign_display()
+            self._update_trans_sign_grid()
+    
+    def _toggle_trans_play(self):
+        """Toggle play in translator tab."""
+        if self._trans_is_playing:
+            self._trans_is_playing = False
+            self.trans_play_btn.config(text="▶ Play")
+        else:
+            self._trans_is_playing = True
+            self.trans_play_btn.config(text="⏸ Pause")
+            self._play_trans_signs()
+    
+    def _play_trans_signs(self):
+        """Play signs automatically in translator tab."""
+        def play_loop():
+            import time
+            while self._trans_is_playing and self._trans_sign_index < len(self._trans_signs) - 1:
+                time.sleep(config.SIGN_DISPLAY_TIME / 1000)
+                if self._trans_is_playing:
+                    self._trans_sign_index += 1
+                    self.root.after(0, self._update_trans_sign_display)
+                    self.root.after(0, self._update_trans_sign_grid)
+            
+            self._trans_is_playing = False
+            self.root.after(0, lambda: self.trans_play_btn.config(text="▶ Play"))
+        
+        threading.Thread(target=play_loop, daemon=True).start()
+    
+    def _speak_trans_text(self):
+        """Speak the translated text in translator tab."""
+        text = self.trans_text_input.get().strip()
+        if text and self.tts:
+            self.tts.speak_async(text)
+    
+    # ===== END TRANSLATOR TAB METHODS =====
+    
+    # ===== AUTOCORRECT METHODS =====
+    
+    def _toggle_autocorrect(self):
+        """Toggle autocorrect on/off."""
+        self.autocorrect_enabled = self.autocorrect_var.get()
+        if not self.autocorrect_enabled:
+            self.suggestion_var.set("")
+            self.accept_suggestion_btn.config(state=tk.DISABLED)
+    
+    def _check_last_word(self):
+        """Check and suggest correction for the last word."""
+        if not self.autocorrect_enabled or not self.autocorrect.enabled:
+            return
+        
+        words = self._detected_word.strip().split()
+        if not words:
+            return
+        
+        last_word = words[-1]
+        
+        # Get correction suggestion
+        corrected, confidence = self.autocorrect.get_correction_with_confidence(last_word)
+        
+        # Only show suggestion if word is likely misspelled (low confidence)
+        if corrected.lower() != last_word.lower() and confidence > 0.5:
+            self._last_suggestion = (last_word, corrected)
+            self.suggestion_var.set(f"Did you mean: {corrected}?")
+            self.accept_suggestion_btn.config(state=tk.NORMAL)
+        else:
+            self.suggestion_var.set("")
+            self.accept_suggestion_btn.config(state=tk.DISABLED)
+            self._last_suggestion = None
+    
+    def _accept_suggestion(self):
+        """Accept the autocorrect suggestion."""
+        if not self._last_suggestion:
+            return
+        
+        old_word, new_word = self._last_suggestion
+        
+        # Replace the last occurrence of old_word with new_word
+        words = self._detected_word.strip().split()
+        if words and words[-1].lower() == old_word.lower():
+            words[-1] = new_word
+            self._detected_word = " ".join(words) + " "
+            self.detected_text_var.set(self._detected_word.upper())
+        
+        # Clear suggestion
+        self.suggestion_var.set("")
+        self.accept_suggestion_btn.config(state=tk.DISABLED)
+        self._last_suggestion = None
+    
+    def _check_trans_last_word(self):
+        """Check and suggest correction for the last word in translator tab."""
+        if not self.autocorrect_enabled or not self.autocorrect.enabled:
+            return
+        
+        words = self._trans_detected_word.strip().split()
+        if not words:
+            return
+        
+        last_word = words[-1]
+        
+        # Get correction suggestion
+        corrected, confidence = self.autocorrect.get_correction_with_confidence(last_word)
+        
+        # Only show suggestion if word is likely misspelled
+        if corrected.lower() != last_word.lower() and confidence > 0.5:
+            self._trans_last_suggestion = (last_word, corrected)
+            self.trans_suggestion_var.set(f"Did you mean: {corrected}?")
+            self.trans_accept_suggestion_btn.config(state=tk.NORMAL)
+        else:
+            self.trans_suggestion_var.set("")
+            self.trans_accept_suggestion_btn.config(state=tk.DISABLED)
+            self._trans_last_suggestion = None
+    
+    def _accept_trans_suggestion(self):
+        """Accept the autocorrect suggestion in translator tab."""
+        if not self._trans_last_suggestion:
+            return
+        
+        old_word, new_word = self._trans_last_suggestion
+        
+        # Replace the last occurrence of old_word with new_word
+        words = self._trans_detected_word.strip().split()
+        if words and words[-1].lower() == old_word.lower():
+            words[-1] = new_word
+            self._trans_detected_word = " ".join(words) + " "
+            self.trans_word_var.set(self._trans_detected_word.upper())
+        
+        # Clear suggestion
+        self.trans_suggestion_var.set("")
+        self.trans_accept_suggestion_btn.config(state=tk.DISABLED)
+        self._trans_last_suggestion = None
+    
+    # ===== END AUTOCORRECT METHODS =====
     
     def _on_close(self):
         """Handle window close."""
