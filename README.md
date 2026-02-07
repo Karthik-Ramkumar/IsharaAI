@@ -9,7 +9,7 @@ IsharaAI is a two-way translation system designed to bridge the communication ga
 - **Rule-Based Fallback**: Intelligent fallback for newer Python versions where TensorFlow isn't yet available.
 
 ## Prerequisites
-- **Python 3.9** (Recommended for full ML support)
+- **Python 3.9** (Required for TensorFlow compatibility)
 - Webcam (for ISL → Speech)
 - Microphone (for Speech → ISL)
 
@@ -32,6 +32,7 @@ IsharaAI is a two-way translation system designed to bridge the communication ga
    ```bash
    pip install -r requirements.txt
    ```
+   > **Note**: Make sure you install dependencies in a **Python 3.9** environment for TensorFlow compatibility.
 
 4. **Models**:
    Ensure the following models are in the `models/` directory:
@@ -40,9 +41,15 @@ IsharaAI is a two-way translation system designed to bridge the communication ga
    - `vosk-model-small-en-us-0.15` (Speech model)
 
 ## Running the App
-```bash
-python app.py
-```
+1. **Activate your virtual environment** (if not already active):
+   ```bash
+   .\.venv\Scripts\activate
+   ```
+2. **Run the main application**:
+   ```bash
+   python app_ctk.py
+   ```
+   > **Note**: This application uses a modern interface (`app_ctk.py`). The description in `app.py` is for the legacy version.
 
 ## How to Use
 - **ISL to Speech**: Show hand signs to the camera. Hold a sign steady for 0.5s to confirm. Use **Spacebar** on your keyboard to add spaces between words. Click **Speak Word** to hear the audio.

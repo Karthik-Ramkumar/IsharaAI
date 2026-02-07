@@ -106,22 +106,22 @@ except Exception as e:
 ISL_ALPHABET = ['1','2','3','4','5','6','7','8','9'] + list(string.ascii_uppercase)
 
 # UI ONLY CHANGE: CustomTkinter theme configuration
-ctk.set_appearance_mode("dark")
+ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
-# UI ONLY CHANGE: Enhanced color scheme
+# UI ONLY CHANGE: Light mode color scheme
 COLORS = {
-    'bg_primary': '#1a1a2e',
-    'bg_secondary': '#16213e',
-    'bg_card': '#0f3460',
-    'text_primary': '#eaeaea',
-    'text_secondary': '#a0a0a0',
+    'bg_primary': '#f5f5f5',
+    'bg_secondary': '#ffffff',
+    'bg_card': '#ffffff',
+    'text_primary': '#1a1a1a',
+    'text_secondary': '#000000',
     'accent': '#00a896',
     'accent_hover': '#02c39a',
     'success': '#27AE60',
     'error': '#E74C3C',
-    'border': '#3a3a5c',
-    'canvas_bg': '#0a0a14'
+    'border': '#d1d5db',
+    'canvas_bg': '#e5e7eb'
 }
 
 
@@ -269,8 +269,13 @@ class ISLTranslatorApp:
                                       segmented_button_selected_hover_color=COLORS['accent_hover'],
                                       segmented_button_unselected_color=COLORS['bg_card'],
                                       segmented_button_unselected_hover_color=COLORS['border'],
+                                      text_color="#000000",
                                       corner_radius=12)
         self.tabview.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Force tab button text to be black
+        self.tabview._segmented_button.configure(text_color="#000000", 
+                                                  text_color_disabled="#000000")
         
         # Create tabs
         self.tabview.add("Translator")
@@ -278,6 +283,7 @@ class ISLTranslatorApp:
         self.tabview.add("Text → ISL")
         self.tabview.add("Speech → ISL")
         self.tabview.add("ISL → Speech")
+        self.tabview.add("Hospital Use Case")
         
         # Build tab contents
         self._create_translator_tab()
@@ -285,6 +291,7 @@ class ISLTranslatorApp:
         self._create_text_to_isl_tab()
         self._create_speech_to_isl_tab()
         self._create_isl_to_speech_tab()
+        self._create_hospital_tab()
         
         # Status bar
         self.status_var = tk.StringVar(value="Initializing...")
@@ -361,6 +368,7 @@ class ISLTranslatorApp:
         self.prev_btn = ctk.CTkButton(control_frame, text="← Previous",
                                       command=self._prev_sign, width=100,
                                       fg_color=COLORS['bg_secondary'],
+                                      text_color="#000000",
                                       hover_color=COLORS['border'])
         self.prev_btn.pack(side=tk.LEFT, padx=5)
         
@@ -373,6 +381,7 @@ class ISLTranslatorApp:
         self.next_btn = ctk.CTkButton(control_frame, text="Next →",
                                       command=self._next_sign, width=100,
                                       fg_color=COLORS['bg_secondary'],
+                                      text_color="#000000",
                                       hover_color=COLORS['border'])
         self.next_btn.pack(side=tk.LEFT, padx=5)
         
@@ -454,6 +463,7 @@ class ISLTranslatorApp:
                                   command=self._clear_camera_word,
                                   fg_color=COLORS['bg_secondary'],
                                   hover_color=COLORS['border'],
+                                  text_color="#000000",
                                   height=40, width=80)
         clear_btn.pack(side=tk.LEFT, padx=5)
         
@@ -468,6 +478,7 @@ class ISLTranslatorApp:
                                   command=self._add_space_to_word,
                                   fg_color=COLORS['bg_secondary'],
                                   hover_color=COLORS['border'],
+                                  text_color="#000000",
                                   height=40, width=90)
         space_btn.pack(side=tk.LEFT, padx=5)
 
@@ -475,6 +486,7 @@ class ISLTranslatorApp:
                                       command=self._backspace_word,
                                       fg_color=COLORS['bg_secondary'],
                                       hover_color=COLORS['border'],
+                                      text_color="#000000",
                                       height=40, width=110)
         backspace_btn.pack(side=tk.LEFT, padx=5)
 
@@ -578,6 +590,7 @@ class ISLTranslatorApp:
                                         command=self._clear_trans_word,
                                         fg_color=COLORS['bg_secondary'],
                                         hover_color=COLORS['border'],
+                                        text_color="#000000",
                                         height=35, width=60)
         trans_clear_btn.pack(side=tk.LEFT, padx=3)
         
@@ -592,6 +605,7 @@ class ISLTranslatorApp:
                                         command=self._add_trans_space,
                                         fg_color=COLORS['bg_secondary'],
                                         hover_color=COLORS['border'],
+                                        text_color="#000000",
                                         height=35, width=80)
         trans_space_btn.pack(side=tk.LEFT, padx=3)
         
@@ -599,6 +613,7 @@ class ISLTranslatorApp:
                                             command=self._trans_backspace,
                                             fg_color=COLORS['bg_secondary'],
                                             hover_color=COLORS['border'],
+                                            text_color="#000000",
                                             height=35, width=100)
         trans_backspace_btn.pack(side=tk.LEFT, padx=3)
         
@@ -711,6 +726,7 @@ class ISLTranslatorApp:
                                             command=self._trans_prev_sign,
                                             fg_color=COLORS['bg_secondary'],
                                             hover_color=COLORS['border'],
+                                            text_color="#000000",
                                             height=32, width=70)
         self.trans_prev_btn.pack(side=tk.LEFT, padx=2)
         
@@ -725,6 +741,7 @@ class ISLTranslatorApp:
                                             command=self._trans_next_sign,
                                             fg_color=COLORS['bg_secondary'],
                                             hover_color=COLORS['border'],
+                                            text_color="#000000",
                                             height=32, width=70)
         self.trans_next_btn.pack(side=tk.LEFT, padx=2)
         
@@ -770,6 +787,266 @@ class ISLTranslatorApp:
                 logger.error(f"Init error: {e}")
                 self.status_var.set(f"Error: {e}")
         threading.Thread(target=init, daemon=True).start()
+    
+    # Hospital sign mappings
+    HOSPITAL_SIGNS = {
+        # Conditions (numbers)
+        '1': 'Fever', '2': 'Pain', '3': 'Stomach pain',
+        '4': 'Headache', '5': 'Chest pain', '6': 'Breathing difficulty',
+        '7': 'Nausea / Vomiting', '8': 'Dizziness', '9': 'Weakness / Fatigue',
+        # Body parts (letters)
+        'a': 'Head', 's': 'Chest', 'i': 'Abdomen / Stomach',
+        'g': 'Leg', 'c': 'Arm', 'v': 'Whole body / General'
+    }
+    
+    def _create_hospital_tab(self):
+        """Create the Hospital Use Case tab with camera detection and guide image."""
+        tab = self.tabview.tab("Hospital Use Case")
+        
+        # Main container with two panels
+        main_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # ===== LEFT PANEL: Camera + Detection (fixed width) =====
+        left_panel = ctk.CTkFrame(main_frame, fg_color=COLORS['bg_card'], corner_radius=10, width=520)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+        left_panel.pack_propagate(False)
+        
+        # Header
+        ctk.CTkLabel(left_panel, text="🏥 Hospital Sign Detection",
+                    font=ctk.CTkFont(size=18, weight="bold"),
+                    text_color=COLORS['accent']).pack(pady=(15, 5))
+        
+        ctk.CTkLabel(left_panel, text="Show signs for medical conditions",
+                    font=ctk.CTkFont(size=11),
+                    text_color=COLORS['text_secondary']).pack(pady=2)
+        
+        # Control buttons
+        control_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
+        control_frame.pack(pady=10)
+        
+        self.hosp_camera_btn = ctk.CTkButton(control_frame, text="📷 Start Camera",
+                                             command=self._toggle_hospital_camera,
+                                             fg_color=COLORS['accent'],
+                                             hover_color=COLORS['accent_hover'],
+                                             height=40, width=140)
+        self.hosp_camera_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.hosp_clear_btn = ctk.CTkButton(control_frame, text="🗑 Clear",
+                                            command=self._clear_hospital_detection,
+                                            fg_color=COLORS['bg_secondary'],
+                                            hover_color=COLORS['border'],
+                                            text_color="#000000",
+                                            height=40, width=90)
+        self.hosp_clear_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Camera canvas
+        canvas_frame = ctk.CTkFrame(left_panel, fg_color=COLORS['canvas_bg'], corner_radius=8)
+        canvas_frame.pack(pady=5)
+        self.hosp_camera_canvas = tk.Canvas(canvas_frame, width=480, height=360,
+                                            bg='black', highlightthickness=0)
+        self.hosp_camera_canvas.pack(padx=4, pady=4)
+        
+        # Detection display
+        self.hosp_sign_var = tk.StringVar(value="Show a sign...")
+        ctk.CTkLabel(left_panel, textvariable=self.hosp_sign_var,
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    text_color=COLORS['accent']).pack(pady=5)
+        
+        self.hosp_meaning_var = tk.StringVar(value="")
+        ctk.CTkLabel(left_panel, textvariable=self.hosp_meaning_var,
+                    font=ctk.CTkFont(size=24, weight="bold"),
+                    text_color=COLORS['text_primary']).pack(pady=10)
+        
+        # Hospital-specific state variables
+        self.hosp_is_camera_running = False
+        self.hosp_camera = None
+        self.hosp_hand_landmarker = None
+        self._hosp_prediction_buffer = []
+        self._hosp_last_letter = None
+        self._hosp_letter_hold_count = 0
+        self._hosp_debounce_threshold = 15
+        self._hosp_detected_signs = []
+        
+        # ===== RIGHT PANEL: Guide Image =====
+        right_panel = ctk.CTkFrame(main_frame, fg_color=COLORS['bg_card'], corner_radius=10)
+        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        # Header
+        ctk.CTkLabel(right_panel, text="📋 Sign Guide",
+                    font=ctk.CTkFont(size=18, weight="bold"),
+                    text_color=COLORS['accent']).pack(pady=(5, 0))
+        
+        # Scrollable image container
+        scroll_container = ctk.CTkScrollableFrame(right_panel, fg_color="transparent")
+        scroll_container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+        
+        # Load and display usecases.png
+        try:
+            image_path = Path(__file__).parent / "usecases.png"
+            if image_path.exists():
+                img = Image.open(image_path)
+                # Keep original aspect ratio, fit to panel width - larger size
+                target_width = 700
+                w_percent = (target_width / float(img.size[0]))
+                target_height = int((float(img.size[1]) * float(w_percent)))
+                img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                label = ctk.CTkLabel(scroll_container, image=photo, text="")
+                label.image = photo
+                label.pack(pady=2)
+            else:
+                ctk.CTkLabel(scroll_container, text="usecases.png not found",
+                            text_color=COLORS['error']).pack(pady=20)
+        except Exception as e:
+            ctk.CTkLabel(scroll_container, text=f"Error loading image: {e}",
+                        text_color=COLORS['error']).pack(pady=20)
+    
+    def _toggle_hospital_camera(self):
+        """Toggle camera for hospital tab."""
+        if not self.hosp_is_camera_running:
+            self._start_hospital_camera()
+        else:
+            self._stop_hospital_camera()
+    
+    def _start_hospital_camera(self):
+        """Start camera for hospital detection."""
+        if not OPENCV_AVAILABLE:
+            self.hosp_sign_var.set("OpenCV not available")
+            return
+        
+        self.hosp_camera = cv2.VideoCapture(0)
+        if not self.hosp_camera.isOpened():
+            self.hosp_sign_var.set("Cannot open camera")
+            return
+        
+        # Initialize hand landmarker
+        if not self.hosp_hand_landmarker and MEDIAPIPE_AVAILABLE:
+            try:
+                model_path = Path(__file__).parent / "models" / "hand_landmarker.task"
+                options = vision.HandLandmarkerOptions(
+                    base_options=python.BaseOptions(model_asset_path=str(model_path)),
+                    running_mode=vision.RunningMode.IMAGE,
+                    num_hands=1,
+                    min_hand_detection_confidence=0.5,
+                    min_hand_presence_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+                self.hosp_hand_landmarker = vision.HandLandmarker.create_from_options(options)
+            except Exception as e:
+                logger.error(f"Hospital landmarker init error: {e}")
+        
+        self.hosp_is_camera_running = True
+        self.hosp_camera_btn.configure(text="⏹ Stop Camera")
+        self._hosp_camera_loop()
+    
+    def _stop_hospital_camera(self):
+        """Stop camera for hospital tab."""
+        self.hosp_is_camera_running = False
+        self.hosp_camera_btn.configure(text="📷 Start Camera")
+        if self.hosp_camera:
+            self.hosp_camera.release()
+            self.hosp_camera = None
+    
+    def _hosp_camera_loop(self):
+        """Camera loop for hospital sign detection."""
+        if not self.hosp_is_camera_running:
+            return
+        
+        ret, frame = self.hosp_camera.read()
+        if ret:
+            frame = cv2.flip(frame, 1)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            detected_letter = None
+            confidence = 0.0
+            
+            if self.hosp_hand_landmarker and MEDIAPIPE_AVAILABLE:
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                detection_result = self.hosp_hand_landmarker.detect(mp_image)
+                
+                if detection_result.hand_landmarks:
+                    for hand_landmarks in detection_result.hand_landmarks:
+                        self._draw_hand_landmarks(rgb_frame, hand_landmarks)
+                        
+                        if isl_model is not None:
+                            landmark_list = self._calc_landmark_list(rgb_frame, hand_landmarks)
+                            processed_landmarks = self._pre_process_landmarks(landmark_list)
+                            import pandas as pd
+                            df = pd.DataFrame(processed_landmarks).transpose()
+                            predictions = isl_model.predict(df, verbose=0)
+                            predicted_class = np.argmax(predictions, axis=1)
+                            confidence = float(np.max(predictions))
+                            if len(predicted_class) > 0 and confidence > 0.5:
+                                detected_letter = ISL_ALPHABET[predicted_class[0]]
+                        else:
+                            try:
+                                landmarks = self._extract_landmarks(hand_landmarks)
+                                detected_letter, confidence = self._predict_letter(landmarks)
+                            except Exception as e:
+                                logger.error(f"Hospital heuristic error: {e}")
+            
+            # Process detection for hospital
+            self._process_hospital_detection(detected_letter, confidence)
+            
+            # Draw status on frame
+            cv2.putText(rgb_frame, f"Letter: {detected_letter or ''}", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+            # Display frame
+            img = Image.fromarray(rgb_frame)
+            img = img.resize((480, 360), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._hosp_camera_photo = photo
+            self.hosp_camera_canvas.delete("all")
+            self.hosp_camera_canvas.create_image(240, 180, image=photo)
+        
+        if self.hosp_is_camera_running:
+            self.root.after(33, self._hosp_camera_loop)
+    
+    def _process_hospital_detection(self, letter, confidence):
+        """Process detected letter and map to hospital meaning."""
+        if letter and confidence > 0.4:
+            self._hosp_prediction_buffer.append(letter.lower())
+            if len(self._hosp_prediction_buffer) > 5:
+                self._hosp_prediction_buffer.pop(0)
+            
+            if self._hosp_prediction_buffer:
+                from collections import Counter
+                most_common = Counter(self._hosp_prediction_buffer).most_common(1)[0]
+                detected = most_common[0]
+                
+                self.hosp_sign_var.set(f"Detected: {detected.upper()}")
+                
+                if detected == self._hosp_last_letter:
+                    self._hosp_letter_hold_count += 1
+                else:
+                    self._hosp_letter_hold_count = 1
+                    self._hosp_last_letter = detected
+                
+                if self._hosp_letter_hold_count >= self._hosp_debounce_threshold:
+                    # Get hospital meaning
+                    meaning = self.HOSPITAL_SIGNS.get(detected, f"Unknown: {detected}")
+                    self._hosp_detected_signs.append((detected, meaning))
+                    
+                    # Display meaning
+                    self.hosp_meaning_var.set(meaning)
+                    
+                    # Reset
+                    self._hosp_letter_hold_count = 0
+                    self._hosp_prediction_buffer = []
+        else:
+            if self._hosp_letter_hold_count > 0:
+                self._hosp_letter_hold_count -= 1
+    
+    def _clear_hospital_detection(self):
+        """Clear hospital detection state."""
+        self._hosp_detected_signs = []
+        self._hosp_prediction_buffer = []
+        self._hosp_last_letter = None
+        self._hosp_letter_hold_count = 0
+        self.hosp_sign_var.set("Show a sign...")
+        self.hosp_meaning_var.set("")
     
     def _translate_text(self):
         """Translate text input to ISL signs."""
@@ -1565,6 +1842,7 @@ class ISLTranslatorApp:
         """Handle window close."""
         self.is_playing = False
         self._stop_camera()
+        self._stop_hospital_camera()  # Cleanup hospital camera
         self._tts_alive = False
         self._tts_queue.put(None)
         self._isl_tts_alive = False
