@@ -107,6 +107,64 @@ except Exception as e:
 ISL_ALPHABET = ['1','2','3','4','5','6','7','8','9'] + list(string.ascii_uppercase)
 
 
+
+class ScrollableFrame(ttk.Frame):
+    """
+    A scrollable frame container (horizontal scrolling).
+    """
+    def __init__(self, container, height=100, *args, **kwargs):
+        super().__init__(container, *args, **kwargs)
+        
+        # Create canvas and scrollbar
+        self.canvas = tk.Canvas(self, height=height, bg=config.COLORS['bg_primary'], highlightthickness=0)
+        self.scrollbar = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        
+        # Create specialized scrollable frame
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        
+        # Configure scroll logic
+        self.scrollable_frame.bind(
+            "<Configure>",
+            self._on_frame_configure
+        )
+        self.canvas.bind(
+            "<Configure>",
+            self._on_canvas_configure
+        )
+        
+        # Create window inside canvas
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        
+        # Link scrollbar to canvas
+        self.canvas.configure(xscrollcommand=self.scrollbar.set)
+        
+        # Pack canvas (scrollbar packed dynamically)
+        self.canvas.pack(side="top", fill="both", expand=True)
+        
+        # Bind mousewheel for horizontal scrolling (Shift+Scroll usually)
+        self.canvas.bind_all("<Shift-MouseWheel>", self._on_mousewheel)
+
+    def _on_frame_configure(self, event):
+        """Update scrollregion and toggle scrollbar visibility."""
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self._toggle_scrollbar()
+
+    def _on_canvas_configure(self, event):
+        """Check if scrollbar is needed on resize."""
+        self._toggle_scrollbar()
+
+    def _toggle_scrollbar(self):
+        """Show scrollbar only if content exceeds visible width."""
+        if self.scrollable_frame.winfo_reqwidth() > self.canvas.winfo_width():
+            self.scrollbar.pack(side="bottom", fill="x")
+        else:
+            self.scrollbar.pack_forget()
+
+    def _on_mousewheel(self, event):
+        if self.scrollbar.winfo_ismapped():
+            self.canvas.xview_scroll(int(-1*(event.delta/120)), "units")
+
+
 class ISLTranslatorApp:
     """
     Main application class for ISL Translation System.
@@ -351,9 +409,11 @@ class ISLTranslatorApp:
                                     highlightbackground=config.COLORS['border'])
         self.sign_canvas.pack(pady=10)
         
-        # Sign grid (thumbnails)
-        self.sign_grid_frame = ttk.Frame(display_frame)
-        self.sign_grid_frame.pack(fill=tk.X, pady=10)
+        # Sign grid (thumbnails) - Now Scrollable
+        # Adjusted height to 85 for cleaner look (thumbnails are 50, plus padding/text)
+        self.sign_grid_container = ScrollableFrame(display_frame, height=85)
+        self.sign_grid_container.pack(fill=tk.X, pady=(10, 20), expand=False)
+        self.sign_grid_frame = self.sign_grid_container.scrollable_frame
         
         # Controls
         control_frame = ttk.Frame(display_frame)
@@ -408,9 +468,10 @@ class ISLTranslatorApp:
                                            highlightbackground=config.COLORS['border'])
         self.speech_sign_canvas.pack(pady=10)
         
-        # Sign sequence display
-        self.speech_sign_grid = ttk.Frame(tab)
-        self.speech_sign_grid.pack(fill=tk.X, pady=10)
+        # Sign sequence display - Now Scrollable
+        self.speech_sign_grid_container = ScrollableFrame(tab, height=85)
+        self.speech_sign_grid_container.pack(fill=tk.X, pady=(10, 20), expand=False)
+        self.speech_sign_grid = self.speech_sign_grid_container.scrollable_frame
     
     def _create_isl_to_speech_tab(self):
         """Create the ISL → Speech tab."""
@@ -572,8 +633,8 @@ class ISLTranslatorApp:
         if not self.current_signs:
             return
         
-        # Show up to 10 thumbnails
-        for i, sign in enumerate(self.current_signs[:10]):
+        # Show ALL thumbnails (no limit)
+        for i, sign in enumerate(self.current_signs):
             frame = ttk.Frame(self.sign_grid_frame)
             frame.pack(side=tk.LEFT, padx=2)
             
@@ -734,7 +795,7 @@ class ISLTranslatorApp:
             widget.destroy()
         
         signs = self._speech_signs
-        for i, s in enumerate(signs[:15]):
+        for i, s in enumerate(signs):
             frame = ttk.Frame(self.speech_sign_grid)
             frame.pack(side=tk.LEFT, padx=2)
             
