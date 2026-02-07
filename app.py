@@ -10,6 +10,7 @@ Two-way ISL translation with a modern UI:
 """
 import os
 import sys
+from pathlib import Path
 import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -170,9 +171,11 @@ class ISLTranslatorApp:
     Main application class for ISL Translation System.
     
     Provides a tabbed interface for:
-    1. Text → ISL: Type text and see ISL signs
-    2. Speech → ISL: Speak and see ISL signs
-    3. ISL → Speech: Show signs and hear text
+    1. Translator: Unified Text/Speech/Camera interface
+    2. Gestures: Reference chart for ISL signs
+    3. Text → ISL: Type text and see ISL signs
+    4. Speech → ISL: Speak and see ISL signs
+    5. ISL → Speech: Show signs and hear text
     """
     
     def __init__(self):
@@ -198,6 +201,11 @@ class ISLTranslatorApp:
         
         # Hand detection (MediaPipe Tasks API)
         self.hand_landmarker = None
+        
+        # Audio recording state
+        self.is_recording = False
+        self.speech_recognizer = None
+        self._recording_stop_event = None
         
         # ISL detection state
         self._detected_word = ""
@@ -358,6 +366,8 @@ class ISLTranslatorApp:
         self.notebook.pack(fill=tk.BOTH, expand=True)
         
         # Create tabs
+        self._create_translator_tab()  # New unified tab
+        self._create_cheatsheet_tab()
         self._create_text_to_isl_tab()
         self._create_speech_to_isl_tab()
         self._create_isl_to_speech_tab()
@@ -448,8 +458,8 @@ class ISLTranslatorApp:
         info.pack(pady=20)
         
         # Record button
-        self.record_btn = ttk.Button(tab, text="🎤 Record (5 seconds)",
-                                    command=self._start_recording)
+        self.record_btn = ttk.Button(tab, text="🎤 Start Recording",
+                                    command=self._toggle_recording)
         self.record_btn.pack(pady=10)
         
         # Recognized text
@@ -551,6 +561,190 @@ class ISLTranslatorApp:
                               font=('Segoe UI', 14))
         word_label.pack()
     
+    def _create_cheatsheet_tab(self):
+        """Create tab to display all Gestures reference image."""
+        tab = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(tab, text="Gestures")
+        
+        # Use simple scrollable frame for image
+        scroll_container = ScrollableFrame(tab)
+        scroll_container.pack(fill=tk.BOTH, expand=True)
+        
+        try:
+            image_path = Path(__file__).parent / "allGestures.png"
+            if image_path.exists():
+                img = Image.open(image_path)
+                
+                # Resize to fit width (app width ~1000, sidebar padding -> use 900)
+                target_width = 900
+                w_percent = (target_width / float(img.size[0]))
+                target_height = int((float(img.size[1]) * float(w_percent)))
+                
+                img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                
+                photo = ImageTk.PhotoImage(img)
+                label = ttk.Label(scroll_container.scrollable_frame, image=photo)
+                label.image = photo  # Keep reference
+                label.pack(pady=10)
+            else:
+                ttk.Label(scroll_container.scrollable_frame, 
+                         text="allGestures.png not found").pack(pady=20)
+        except Exception as e:
+            ttk.Label(scroll_container.scrollable_frame, 
+                     text=f"Error loading image: {e}").pack(pady=20)
+
+    def _create_translator_tab(self):
+        """Create the unified Translator tab with ISL→Speech on left and Speech→ISL on right."""
+        tab = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(tab, text="Translator")
+        
+        # Main container with two panels
+        main_frame = ttk.Frame(tab)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # ===== LEFT PANEL: ISL → Speech =====
+        left_panel = ttk.Frame(main_frame)
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        # Left header
+        left_header = ttk.Label(left_panel, text="ISL → Speech", font=('Segoe UI', 14, 'bold'))
+        left_header.pack(pady=(0, 10))
+        
+        # Controls
+        left_control_frame = ttk.Frame(left_panel)
+        left_control_frame.pack(pady=5)
+        
+        self.trans_camera_btn = ttk.Button(left_control_frame, text="📷 Start Camera",
+                                          command=self._toggle_trans_camera)
+        self.trans_camera_btn.pack(side=tk.LEFT, padx=3)
+        
+        trans_clear_btn = ttk.Button(left_control_frame, text="Clear",
+                                    command=self._clear_trans_word)
+        trans_clear_btn.pack(side=tk.LEFT, padx=3)
+        
+        trans_speak_btn = ttk.Button(left_control_frame, text="🔊 Speak Word",
+                                    command=self._speak_trans_word)
+        trans_speak_btn.pack(side=tk.LEFT, padx=3)
+        
+        trans_space_btn = ttk.Button(left_control_frame, text="[S] Space",
+                                    command=self._add_trans_space)
+        trans_space_btn.pack(side=tk.LEFT, padx=3)
+        
+        trans_backspace_btn = ttk.Button(left_control_frame, text="[B] Backspace",
+                                        command=self._trans_backspace)
+        trans_backspace_btn.pack(side=tk.LEFT, padx=3)
+        
+        # Camera status
+        self.trans_camera_status_var = tk.StringVar(value="Camera off")
+        trans_status = ttk.Label(left_panel, textvariable=self.trans_camera_status_var,
+                                style='Status.TLabel')
+        trans_status.pack(pady=2)
+        
+        # Camera canvas (smaller to fit side-by-side)
+        self.trans_camera_canvas = tk.Canvas(left_panel, width=380, height=285,
+                                            bg='black', highlightthickness=2,
+                                            highlightbackground=config.COLORS['border'])
+        self.trans_camera_canvas.pack(pady=5)
+        
+        # Detected gesture/word
+        self.trans_gesture_var = tk.StringVar(value="Show hand sign...")
+        trans_gesture_label = ttk.Label(left_panel, textvariable=self.trans_gesture_var,
+                                       font=('Segoe UI', 14, 'bold'))
+        trans_gesture_label.pack()
+        
+        self.trans_word_var = tk.StringVar(value="")
+        trans_word_label = ttk.Label(left_panel, textvariable=self.trans_word_var,
+                                    font=('Segoe UI', 12))
+        trans_word_label.pack()
+        
+        # ===== VERTICAL DIVIDER =====
+        divider = ttk.Separator(main_frame, orient='vertical')
+        divider.pack(side=tk.LEFT, fill=tk.Y, padx=10)
+        
+        # ===== RIGHT PANEL: Text/Speech → ISL =====
+        right_panel = ttk.Frame(main_frame)
+        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        # Right header
+        right_header = ttk.Label(right_panel, text="Text/Speech → ISL", font=('Segoe UI', 14, 'bold'))
+        right_header.pack(pady=(0, 5))
+        
+        # === Text Input Section ===
+        input_frame = ttk.Frame(right_panel)
+        input_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(input_frame, text="Enter text:").pack(anchor=tk.W)
+        
+        input_row = ttk.Frame(input_frame)
+        input_row.pack(fill=tk.X, pady=(2, 0))
+        
+        self.trans_text_input = ttk.Entry(input_row, width=30, font=('Segoe UI', 11))
+        self.trans_text_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.trans_text_input.bind('<Return>', lambda e: self._translate_trans_text())
+        
+        trans_translate_btn = ttk.Button(input_row, text="Translate",
+                                        command=self._translate_trans_text)
+        trans_translate_btn.pack(side=tk.LEFT)
+        
+        # === OR Record Section ===
+        or_label = ttk.Label(right_panel, text="─── OR ───", font=('Segoe UI', 9))
+        or_label.pack(pady=3)
+        
+        self.trans_record_btn = ttk.Button(right_panel, text="🎤 Start Recording",
+                                          command=self._toggle_trans_recording)
+        self.trans_record_btn.pack(pady=3)
+        
+        # Recognized/Input text display
+        self.trans_speech_text_var = tk.StringVar(value="Type text or record speech")
+        trans_speech_label = ttk.Label(right_panel, textvariable=self.trans_speech_text_var,
+                                      font=('Segoe UI', 11), wraplength=300)
+        trans_speech_label.pack(pady=5)
+        
+        # Sign display canvas
+        self.trans_sign_canvas = tk.Canvas(right_panel, width=200, height=200,
+                                          bg='white', highlightthickness=2,
+                                          highlightbackground=config.COLORS['border'])
+        self.trans_sign_canvas.pack(pady=3)
+        
+        # Sign grid (scrollable)
+        self.trans_sign_grid_container = ScrollableFrame(right_panel, height=65)
+        self.trans_sign_grid_container.pack(fill=tk.X, pady=3, expand=False)
+        self.trans_sign_grid = self.trans_sign_grid_container.scrollable_frame
+        
+        # === Controls: Previous/Play/Next ===
+        trans_control_frame = ttk.Frame(right_panel)
+        trans_control_frame.pack(pady=5)
+        
+        self.trans_prev_btn = ttk.Button(trans_control_frame, text="← Prev",
+                                        command=self._trans_prev_sign)
+        self.trans_prev_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.trans_play_btn = ttk.Button(trans_control_frame, text="▶ Play",
+                                        command=self._toggle_trans_play)
+        self.trans_play_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.trans_next_btn = ttk.Button(trans_control_frame, text="Next →",
+                                        command=self._trans_next_sign)
+        self.trans_next_btn.pack(side=tk.LEFT, padx=2)
+        
+        trans_speak_isl_btn = ttk.Button(trans_control_frame, text="🔊 Speak",
+                                        command=self._speak_trans_text)
+        trans_speak_isl_btn.pack(side=tk.LEFT, padx=10)
+        
+        # Initialize translator-specific state
+        self.trans_is_camera_running = False
+        self.trans_is_recording = False
+        self._trans_detected_word = ""
+        self._trans_current_letter = ""
+        self._trans_last_letter = ""
+        self._trans_letter_hold_count = 0
+        self._trans_debounce_threshold = 15  # Same as original
+        self._trans_prediction_buffer = []
+        self._trans_speech_signs = []
+        self._trans_speech_sign_index = 0
+        self._trans_recording_stop_event = None
+        self._trans_is_playing = False
+    
     def _init_pipelines_async(self):
         """Initialize pipelines in background thread."""
         def init():
@@ -567,6 +761,14 @@ class ISLTranslatorApp:
                 self.image_cache.load_all_images(config.SUPPORTED_SIGNS)
                 
                 self.status_var.set(f"Ready! {self.image_cache.loaded_count} signs loaded")
+                
+                # Initialize speech recognizer
+                from src.core.speech_recognition import create_recognizer
+                self.speech_recognizer = create_recognizer()
+                if self.speech_recognizer.is_available:
+                    logger.info("Speech recognizer ready")
+                else:
+                    logger.warning("Speech recognizer not available")
                 
             except Exception as e:
                 logger.error(f"Init error: {e}")
@@ -704,68 +906,84 @@ class ISLTranslatorApp:
         if text:
             self._speak_direct(text)
     
-    def _start_recording(self):
-        """Start speech recording."""
-        self.record_btn.config(state=tk.DISABLED)
-        self.speech_text_var.set("🎤 Listening... Speak now!")
-        
-        # Clear previous signs
-        self.speech_sign_canvas.delete("all")
-        for widget in self.speech_sign_grid.winfo_children():
-            widget.destroy()
-        
-        def record():
-            try:
-                # Initialize speech recognizer if needed
-                from src.core.speech_recognition import create_recognizer
-                recognizer = create_recognizer()
+    def _toggle_recording(self):
+        """Toggle speech recording on/off."""
+        if not self.is_recording:
+            # Start recording
+            self.is_recording = True
+            self.record_btn.config(text="⬛ Stop Recording")
+            self.speech_text_var.set("🎤 Listening... Speak now!")
+            
+            # Clear previous signs
+            self.speech_sign_canvas.delete("all")
+            for widget in self.speech_sign_grid.winfo_children():
+                widget.destroy()
+            self._speech_signs = []
+            
+            # Start background thread
+            self._recording_stop_event = threading.Event()
+            threading.Thread(target=self._recording_thread, daemon=True).start()
+            
+        else:
+            # Stop recording
+            self.is_recording = False
+            self.record_btn.config(text="🎤 Start Recording")
+            if self._recording_stop_event:
+                self._recording_stop_event.set()
+    
+    def _recording_thread(self):
+        """Background thread for continuous recording."""
+        if not self.speech_recognizer or not self.speech_recognizer.is_available:
+             self.root.after(0, lambda: self.speech_text_var.set("❌ No recognizer available"))
+             self.root.after(0, self._toggle_recording) # Reset UI
+             return
+
+        def callback(text, is_final):
+            if text:
+                self.root.after(0, lambda: self.speech_text_var.set(f"Recognized: \"{text}\""))
                 
-                # Force re-check availability if needed
-                if not recognizer.is_available:
-                     # Try to re-initialize or check if sounddevice is actually working
-                     pass
-                
-                if not recognizer.is_available:
-                    self.root.after(0, lambda: self.speech_text_var.set("❌ No speech recognizer available"))
-                    return
-                
-                # Recognize speech
-                text = recognizer.recognize_from_microphone(duration=5)
-                
+                # If final result or significant pause, translate
+                if is_final:
+                    self._process_speech_text(text)
+
+        try:
+             # Use the new continuous listening method if available
+            if hasattr(self.speech_recognizer, 'listen_continuously'):
+                self.speech_recognizer.listen_continuously(callback, self._recording_stop_event)
+            else:
+                # Fallback for other recognizers (mock/google) - just one shot
+                text = self.speech_recognizer.recognize_from_microphone(duration=5)
                 if text:
-                    self.root.after(0, lambda: self.speech_text_var.set(f"Recognized: \"{text}\""))
-                    
-                    # Translate to ISL
-                    if self.text_to_isl:
-                        try:
-                            detected_signs = self.text_to_isl.translate(text)
-                            
-                            if detected_signs:
-                                # Store for display
-                                self._speech_signs = detected_signs
-                                self._speech_sign_index = 0
-                                
-                                # Update display on main thread
-                                self.root.after(0, self._update_speech_signs_display)
-                                
-                                # Auto-play the signs
-                                self.root.after(500, self._play_speech_signs)
-                            else:
-                                self.root.after(0, lambda: self.speech_text_var.set(f"Recognized: \"{text}\" (no translatable characters)"))
-                        except Exception as translation_err:
-                            logger.error(f"Translation error: {translation_err}")
-                            self.root.after(0, lambda: self.speech_text_var.set(f"Translation Error: {translation_err}"))
-                else:
-                    self.root.after(0, lambda: self.speech_text_var.set("No speech detected. Try again."))
-                    
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Recording error: {error_msg}")
-                self.root.after(0, lambda msg=error_msg: self.speech_text_var.set(f"Error: {msg}"))
-            finally:
-                self.root.after(0, lambda: self.record_btn.config(state=tk.NORMAL))
-        
-        threading.Thread(target=record, daemon=True).start()
+                    callback(text, True)
+                self.root.after(0, self._toggle_recording) # Auto-stop for fallback
+                
+        except Exception as e:
+            logger.error(f"Recording error: {e}")
+            self.root.after(0, lambda: self.speech_text_var.set(f"Error: {e}"))
+            self.root.after(0, self._toggle_recording)
+
+    def _process_speech_text(self, text):
+        """Translate recognized text to ISL."""
+        if not text or not self.text_to_isl:
+            return
+            
+        try:
+            detected_signs = self.text_to_isl.translate(text)
+            
+            if detected_signs:
+                # Store for display
+                self._speech_signs = detected_signs
+                self._speech_sign_index = 0
+                
+                # Update display on main thread
+                self.root.after(0, self._update_speech_signs_display)
+                
+                # Auto-play the signs
+                self.root.after(500, self._play_speech_signs)
+            else:
+                self.root.after(0, lambda: self.speech_text_var.set(f"Recognized: \"{text}\" (no translatable characters)"))
+        except Exception as translation_err:
+            logger.error(f"Translation error: {translation_err}")
     
     def _update_speech_signs_display(self):
         """Update the speech tab sign display."""
@@ -826,17 +1044,19 @@ class ISLTranslatorApp:
     
     def _add_space_to_word(self, event=None):
         """Add a space to the detected word."""
-        # Check if ISL -> Speech tab is active
+        # Check if ISL -> Speech tab (index 4) or Translator tab (index 0) is active
         try:
             current_tab = self.notebook.index("current")
-            if current_tab != 2:
+            if current_tab == 4:  # ISL -> Speech
+                if self._detected_word and not self._detected_word.endswith(" "):
+                    self._detected_word += " "
+                    self.word_var.set(f"Word: {self._detected_word.upper()}")
+            elif current_tab == 0:  # Translator
+                self._add_trans_space()
+            else:
                 return
         except tk.TclError:
             return
-
-        if self._detected_word and not self._detected_word.endswith(" "):
-            self._detected_word += " "
-            self.word_var.set(f"Word: {self._detected_word.upper()}")
 
         if event:
             return "break"
@@ -851,17 +1071,17 @@ class ISLTranslatorApp:
         """Remove the last character from the detected word."""
         try:
             current_tab = self.notebook.index("current")
-            if current_tab != 2:
-                return
+            if current_tab == 4:  # ISL -> Speech
+                if self._detected_word:
+                    self._detected_word = self._detected_word[:-1]
+                    if self._detected_word:
+                        self.word_var.set(f"Word: {self._detected_word.upper()}")
+                    else:
+                        self.word_var.set("")
+            elif current_tab == 0:  # Translator
+                self._trans_backspace()
         except tk.TclError:
             return
-
-        if self._detected_word:
-            self._detected_word = self._detected_word[:-1]
-            if self._detected_word:
-                self.word_var.set(f"Word: {self._detected_word.upper()}")
-            else:
-                self.word_var.set("")
     
     def _toggle_camera(self):
         """Toggle camera for ISL → Speech."""
@@ -1244,6 +1464,413 @@ class ISLTranslatorApp:
         # Queue the full word for the dedicated ISL TTS worker
         self._isl_tts_queue.put(word)
     
+    # ========== TRANSLATOR TAB HANDLERS ==========
+    
+    def _toggle_trans_camera(self):
+        """Toggle camera for Translator tab (left panel)."""
+        if not self.trans_is_camera_running:
+            # Start camera
+            self.trans_camera_status_var.set("Starting camera...")
+            
+            # Open camera if needed
+            if self.camera is None or not self.camera.isOpened():
+                self.camera = cv2.VideoCapture(0)
+                if self.camera.isOpened():
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            
+            if not self.camera.isOpened():
+                self.trans_camera_status_var.set("Camera failed to open")
+                return
+            
+            # Initialize hand landmarker if needed (same as original)
+            if self.hand_landmarker is None:
+                try:
+                    model_path = Path(__file__).parent / "models" / "hand_landmarker.task"
+                    if not model_path.exists():
+                        self.trans_camera_status_var.set("Hand model not found")
+                        return
+                    
+                    options = vision.HandLandmarkerOptions(
+                        base_options=python.BaseOptions(model_asset_path=str(model_path)),
+                        running_mode=vision.RunningMode.IMAGE,
+                        num_hands=1,
+                        min_hand_detection_confidence=0.5,
+                        min_hand_presence_confidence=0.5,
+                        min_tracking_confidence=0.5
+                    )
+                    self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
+                    logger.info("HandLandmarker initialized for Translator tab")
+                except Exception as e:
+                    logger.error(f"Failed to init hand landmarker: {e}")
+                    self.trans_camera_status_var.set(f"Error: {e}")
+                    return
+            
+            # Reset detection state for translator
+            self._trans_detected_word = ""
+            self._trans_last_letter = ""
+            self._trans_letter_count = 0
+            self._trans_prediction_buffer = []
+            
+            self.trans_is_camera_running = True
+            self.trans_camera_btn.config(text="⬛ Stop Camera")
+            self.trans_camera_status_var.set("Camera running")
+            
+            self._trans_camera_loop()
+        else:
+            # Stop camera
+            self.trans_is_camera_running = False
+            self.trans_camera_btn.config(text="📷 Start Camera")
+            self.trans_camera_status_var.set("Camera off")
+            # Clear the canvas
+            self.trans_camera_canvas.delete("all")
+            # Reset state
+            self._trans_current_letter = ""
+            self.trans_gesture_var.set("Show hand sign...")
+    
+    def _trans_camera_loop(self):
+        """Camera loop for Translator tab - uses same detection as original."""
+        if not self.trans_is_camera_running:
+            return
+        
+        if self.camera is None or not self.camera.isOpened():
+            return
+        
+        ret, frame = self.camera.read()
+        
+        if ret:
+            # Flip for mirror effect
+            frame = cv2.flip(frame, 1)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Detect hands
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+            detection_result = self.hand_landmarker.detect(mp_image)
+            
+            detected_letter = None
+            confidence = 0.0
+            
+            if detection_result.hand_landmarks:
+                for hand_landmarks in detection_result.hand_landmarks:
+                    # Draw landmarks
+                    self._draw_hand_landmarks(rgb_frame, hand_landmarks)
+                    
+                    if isl_model is not None:
+                        # ML Model Prediction (same as original)
+                        landmark_list = self._calc_landmark_list(rgb_frame, hand_landmarks)
+                        processed_landmarks = self._pre_process_landmarks(landmark_list)
+                        
+                        import pandas as pd
+                        df = pd.DataFrame(processed_landmarks).transpose()
+                        predictions = isl_model.predict(df, verbose=0)
+                        predicted_class = np.argmax(predictions, axis=1)
+                        confidence = float(np.max(predictions))
+                        
+                        if len(predicted_class) > 0 and confidence > 0.5:
+                            detected_letter = ISL_ALPHABET[predicted_class[0]]
+                    else:
+                        # Fallback heuristic
+                        try:
+                            landmarks = self._extract_landmarks(hand_landmarks)
+                            detected_letter, confidence = self._predict_letter(landmarks)
+                        except Exception as e:
+                            logger.error(f"Heuristic error: {e}")
+            
+            # Process detection for translator tab
+            self._process_trans_detection(detected_letter, confidence)
+            
+            # Draw status on frame
+            self._draw_trans_status(rgb_frame)
+            
+            # Resize and display
+            img = Image.fromarray(rgb_frame)
+            img = img.resize((380, 285), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            
+            self._trans_camera_photo = photo
+            self.trans_camera_canvas.delete("all")
+            self.trans_camera_canvas.create_image(190, 142, image=photo)
+        
+        # Schedule next frame
+        if self.trans_is_camera_running:
+            self.root.after(33, self._trans_camera_loop)
+    
+    def _process_trans_detection(self, letter, confidence):
+        """Process detected letter with debouncing - same as original."""
+        if letter and confidence > 0.4:  # Relaxed threshold
+            # Add to buffer
+            self._trans_prediction_buffer.append(letter)
+            if len(self._trans_prediction_buffer) > 5:
+                self._trans_prediction_buffer.pop(0)
+            
+            # Get most common prediction
+            if self._trans_prediction_buffer:
+                from collections import Counter
+                most_common = Counter(self._trans_prediction_buffer).most_common(1)[0]
+                detected = most_common[0]
+                
+                # Update current letter display
+                self._trans_current_letter = detected
+                self.trans_gesture_var.set(f"Detected: {detected.upper()}")
+                
+                # Debounce: require consistent detection
+                if detected == self._trans_last_letter:
+                    self._trans_letter_hold_count += 1
+                else:
+                    self._trans_letter_hold_count = 1
+                    self._trans_last_letter = detected
+                
+                # Add to word after holding
+                if self._trans_letter_hold_count >= self._trans_debounce_threshold:
+                    self._trans_detected_word += detected
+                    self.trans_word_var.set(f"Word: {self._trans_detected_word.upper()}")
+                    
+                    # Speak the letter via dedicated ISL TTS
+                    self._isl_tts_queue.put(detected.upper())
+                    
+                    # Reset
+                    self._trans_letter_hold_count = 0
+                    self._trans_prediction_buffer = []
+        else:
+            # Decay hold count if nothing detected
+            if self._trans_letter_hold_count > 0:
+                self._trans_letter_hold_count -= 1
+            if self._trans_letter_hold_count == 0:
+                self.trans_gesture_var.set("Show hand sign...")
+    
+    def _draw_trans_status(self, frame):
+        """Draw detection status on frame - same as original _draw_status."""
+        # Draw current letter (green)
+        cv2.putText(frame, f"Letter: {self._trans_current_letter.upper()}", (10, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        # Draw word (yellow)
+        cv2.putText(frame, f"Word: {self._trans_detected_word.upper()}", (10, 70),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+        
+        # Draw hold progress bar
+        progress = min(self._trans_letter_hold_count / self._trans_debounce_threshold, 1.0)
+        bar_width = int(200 * progress)
+        cv2.rectangle(frame, (10, 90), (210, 110), (100, 100, 100), -1)
+        cv2.rectangle(frame, (10, 90), (10 + bar_width, 110), (0, 255, 0), -1)
+        cv2.putText(frame, "Hold to confirm", (10, 130),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    
+    def _clear_trans_word(self):
+        """Clear detected word in Translator tab."""
+        self._trans_detected_word = ""
+        self.trans_word_var.set("")
+        self.trans_gesture_var.set("Show hand sign...")
+    
+    def _speak_trans_word(self):
+        """Speak detected word in Translator tab."""
+        if self._trans_detected_word:
+            self._speak_direct(self._trans_detected_word)
+    
+    def _add_trans_space(self):
+        """Add space to detected word in Translator tab."""
+        if self._trans_detected_word and not self._trans_detected_word.endswith(" "):
+            self._trans_detected_word += " "
+            self.trans_word_var.set(f"Word: {self._trans_detected_word.upper()}")
+    
+    def _trans_backspace(self):
+        """Remove last char from detected word in Translator tab."""
+        if self._trans_detected_word:
+            self._trans_detected_word = self._trans_detected_word[:-1]
+            if self._trans_detected_word:
+                self.trans_word_var.set(f"Word: {self._trans_detected_word.upper()}")
+            else:
+                self.trans_word_var.set("")
+    
+    def _toggle_trans_recording(self):
+        """Toggle recording for Translator tab (right panel)."""
+        if not self.trans_is_recording:
+            # Start recording
+            self.trans_is_recording = True
+            self.trans_record_btn.config(text="⬛ Stop Recording")
+            self.trans_speech_text_var.set("🎤 Listening...")
+            
+            # Clear previous signs
+            self.trans_sign_canvas.delete("all")
+            for widget in self.trans_sign_grid.winfo_children():
+                widget.destroy()
+            self._trans_speech_signs = []
+            
+            # Start background recording thread
+            self._trans_recording_stop_event = threading.Event()
+            threading.Thread(target=self._trans_recording_thread, daemon=True).start()
+        else:
+            # Stop recording
+            self.trans_is_recording = False
+            self.trans_record_btn.config(text="🎤 Start Recording")
+            if self._trans_recording_stop_event:
+                self._trans_recording_stop_event.set()
+    
+    def _trans_recording_thread(self):
+        """Background recording thread for Translator tab."""
+        if not self.speech_recognizer or not self.speech_recognizer.is_available:
+            self.root.after(0, lambda: self.trans_speech_text_var.set("❌ No recognizer"))
+            self.root.after(0, self._toggle_trans_recording)
+            return
+        
+        def callback(text, is_final):
+            if text:
+                self.root.after(0, lambda: self.trans_speech_text_var.set(f"Recognized: \"{text}\""))
+                if is_final:
+                    self._process_trans_speech(text)
+        
+        try:
+            if hasattr(self.speech_recognizer, 'listen_continuously'):
+                self.speech_recognizer.listen_continuously(callback, self._trans_recording_stop_event)
+            else:
+                text = self.speech_recognizer.recognize_from_microphone(duration=5)
+                if text:
+                    callback(text, True)
+                self.root.after(0, self._toggle_trans_recording)
+        except Exception as e:
+            logger.error(f"Trans recording error: {e}")
+            self.root.after(0, lambda: self.trans_speech_text_var.set(f"Error: {e}"))
+            self.root.after(0, self._toggle_trans_recording)
+    
+    def _process_trans_speech(self, text):
+        """Translate speech to ISL in Translator tab."""
+        if not text or not self.text_to_isl:
+            return
+        
+        try:
+            signs = self.text_to_isl.translate(text)
+            if signs:
+                self._trans_speech_signs = signs
+                self._trans_speech_sign_index = 0
+                self.root.after(0, self._update_trans_signs_display)
+                self.root.after(500, self._play_trans_signs)
+        except Exception as e:
+            logger.error(f"Trans translation error: {e}")
+    
+    def _update_trans_signs_display(self):
+        """Update sign display in Translator tab."""
+        if not self._trans_speech_signs:
+            return
+        
+        index = self._trans_speech_sign_index
+        if index >= len(self._trans_speech_signs):
+            return
+        
+        sign = self._trans_speech_signs[index]
+        
+        # Update main canvas
+        if sign['image']:
+            img = sign['image'].copy()
+            img = img.resize((230, 230), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._trans_sign_photo = photo
+            self.trans_sign_canvas.delete("all")
+            self.trans_sign_canvas.create_image(125, 125, image=photo)
+        
+        # Update grid
+        for widget in self.trans_sign_grid.winfo_children():
+            widget.destroy()
+        
+        for i, s in enumerate(self._trans_speech_signs):
+            frame = ttk.Frame(self.trans_sign_grid)
+            frame.pack(side=tk.LEFT, padx=2)
+            
+            if s['image']:
+                thumb = s['image'].copy()
+                thumb = thumb.resize((35, 35), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(thumb)
+                label = tk.Label(frame, image=photo,
+                               highlightthickness=2 if i == index else 0,
+                               highlightbackground=config.COLORS['accent'] if i == index else 'white')
+                label.image = photo
+                label.pack()
+            
+            char_label = ttk.Label(frame, text=s['char'].upper(), font=('Segoe UI', 7))
+            char_label.pack()
+    
+    def _play_trans_signs(self):
+        """Auto-play signs in Translator tab."""
+        if not self._trans_speech_signs or not self._trans_is_playing:
+            return
+        
+        if self._trans_speech_sign_index < len(self._trans_speech_signs):
+            self._update_trans_signs_display()
+            self._trans_speech_sign_index += 1
+            self.root.after(int(config.SIGN_DISPLAY_TIME), self._play_trans_signs)
+        else:
+            # Finished playing
+            self._trans_is_playing = False
+            self.trans_play_btn.config(text="▶ Play")
+    
+    def _translate_trans_text(self):
+        """Translate text input to ISL in Translator tab."""
+        text = self.trans_text_input.get().strip()
+        if not text:
+            return
+        
+        if not self.text_to_isl:
+            self.trans_speech_text_var.set("Translation engine loading...")
+            return
+        
+        try:
+            self.trans_speech_text_var.set(f"Translating: \"{text}\"")
+            signs = self.text_to_isl.translate(text)
+            
+            if signs:
+                self._trans_speech_signs = signs
+                self._trans_speech_sign_index = 0
+                self._update_trans_signs_display()
+                self.trans_speech_text_var.set(f"Showing: \"{text}\"")
+            else:
+                self.trans_speech_text_var.set("No signs found for this text")
+        except Exception as e:
+            logger.error(f"Trans text translation error: {e}")
+            self.trans_speech_text_var.set(f"Error: {e}")
+    
+    def _trans_prev_sign(self):
+        """Go to previous sign in Translator tab."""
+        if self._trans_speech_signs and self._trans_speech_sign_index > 0:
+            self._trans_speech_sign_index -= 1
+            self._update_trans_signs_display()
+    
+    def _trans_next_sign(self):
+        """Go to next sign in Translator tab."""
+        if self._trans_speech_signs and self._trans_speech_sign_index < len(self._trans_speech_signs) - 1:
+            self._trans_speech_sign_index += 1
+            self._update_trans_signs_display()
+    
+    def _toggle_trans_play(self):
+        """Toggle play/pause for sign animation in Translator tab."""
+        if not self._trans_speech_signs:
+            return
+        
+        if self._trans_is_playing:
+            # Stop
+            self._trans_is_playing = False
+            self.trans_play_btn.config(text="▶ Play")
+        else:
+            # Start
+            self._trans_is_playing = True
+            self.trans_play_btn.config(text="⏸ Pause")
+            
+            # If at end, restart from beginning
+            if self._trans_speech_sign_index >= len(self._trans_speech_signs) - 1:
+                self._trans_speech_sign_index = 0
+            
+            self._play_trans_signs()
+    
+    def _speak_trans_text(self):
+        """Speak the current text in Translator tab."""
+        text = self.trans_text_input.get().strip()
+        if not text:
+            # Try to speak from recognized speech
+            current_text = self.trans_speech_text_var.get()
+            if current_text.startswith("Showing:") or current_text.startswith("Recognized:"):
+                text = current_text.split("\"")[1] if "\"" in current_text else ""
+        
+        if text:
+            self._speak_direct(text)
+
     def _on_close(self):
         """Handle window close."""
         self.is_playing = False
