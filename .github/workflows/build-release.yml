@@ -1,0 +1,83 @@
+name: Build and Release Windows Executable
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'  # Use Python 3.11 for compatibility
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+        
+    - name: Build executable
+      run: |
+        cd IsharaAI
+        pyinstaller --name=IsharaAI --onefile --windowed --add-data="data;data" --add-data="models;models" --add-data="src;src" --add-data="config.py;." --hidden-import=PIL --hidden-import=PIL._tkinter_finder --hidden-import=cv2 --hidden-import=mediapipe --hidden-import=tensorflow --hidden-import=textblob --hidden-import=pyttsx3 --hidden-import=sounddevice --hidden-import=vosk --hidden-import=pandas --hidden-import=numpy --collect-all=mediapipe --collect-all=tensorflow --collect-all=textblob app.py
+        
+    - name: Create distribution package
+      run: |
+        cd IsharaAI
+        mkdir IsharaAI-Windows
+        copy dist\IsharaAI.exe IsharaAI-Windows\
+        xcopy /E /I data IsharaAI-Windows\data
+        xcopy /E /I models IsharaAI-Windows\models
+        copy README.md IsharaAI-Windows\
+        
+    - name: Create ZIP archive
+      run: |
+        cd IsharaAI
+        powershell Compress-Archive -Path IsharaAI-Windows -DestinationPath IsharaAI-Windows.zip
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: IsharaAI-Windows
+        path: IsharaAI/IsharaAI-Windows.zip
+        
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: IsharaAI/IsharaAI-Windows.zip
+        body: |
+          ## IsharaAI - Indian Sign Language Translation System
+          
+          ### Features
+          - ✅ ISL → Text/Speech (Real-time sign language to text conversion)
+          - ✅ Text/Speech → ISL (Convert text and speech to ISL signs)
+          - ✅ Autocorrect with NLP
+          - ✅ Professional UI with modern design
+          
+          ### Download
+          Download `IsharaAI-Windows.zip` and extract it.
+          
+          ### Installation
+          1. Extract the ZIP file
+          2. Run `IsharaAI.exe`
+          3. The first run may take a moment to initialize
+          
+          ### Requirements
+          - Windows 10/11 (64-bit)
+          - Webcam (for ISL detection)
+          - Microphone (for speech-to-ISL)
+          
+          ### Note
+          Some antivirus software may flag the executable as unknown. This is normal for PyInstaller-built applications. You can safely allow it.
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
