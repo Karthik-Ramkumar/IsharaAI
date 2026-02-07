@@ -90,9 +90,10 @@ class ISLTranslatorApp:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("ISL Translation System")
-        self.root.geometry("1000x700")
+        self.root.title("ISL Translation System - Professional Edition")
+        self.root.geometry("1200x750")
         self.root.configure(bg=config.COLORS['bg_primary'])
+        self.root.resizable(True, True)  # Allow resizing
         
         # Initialize pipelines
         self.text_to_isl = None
@@ -109,6 +110,8 @@ class ISLTranslatorApp:
         # Camera state (for ISL → Speech)
         self.camera = None
         self.is_camera_running = False
+        self._frame_count = 0  # Frame counter for optimization
+        self._prediction_skip = 2  # Only predict every 3rd frame (reduces lag)
         
         # Hand detection (MediaPipe Tasks API)
         self.hand_landmarker = None
@@ -132,51 +135,97 @@ class ISLTranslatorApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
     
     def _setup_styles(self):
-        """Configure ttk styles for a modern look."""
+        """Configure ttk styles for a modern professional look."""
         style = ttk.Style()
         style.theme_use('clam')
         
         # Configure colors
-        style.configure('TNotebook', background=config.COLORS['bg_primary'])
+        style.configure('TNotebook', 
+                       background=config.COLORS['bg_primary'],
+                       borderwidth=0)
         style.configure('TNotebook.Tab', 
                        background=config.COLORS['bg_secondary'],
-                       foreground=config.COLORS['text_primary'],
-                       padding=[20, 10])
+                       foreground=config.COLORS['text_secondary'],
+                       padding=[24, 12],
+                       font=('Segoe UI', 11, 'bold'))
         style.map('TNotebook.Tab',
-                 background=[('selected', config.COLORS['accent'])])
+                 background=[('selected', config.COLORS['bg_tertiary'])],
+                 foreground=[('selected', config.COLORS['accent'])])
         
         style.configure('TFrame', background=config.COLORS['bg_primary'])
+        
         style.configure('TLabel', 
                        background=config.COLORS['bg_primary'],
-                       foreground=config.COLORS['text_primary'])
+                       foreground=config.COLORS['text_primary'],
+                       font=('Segoe UI', 11))
+        
         style.configure('TButton',
                        background=config.COLORS['accent'],
-                       foreground=config.COLORS['text_primary'],
-                       padding=[15, 8])
+                       foreground='white',
+                       padding=[20, 12],
+                       font=('Segoe UI', 10, 'bold'),
+                       borderwidth=0,
+                       focuscolor='none')
+        style.map('TButton',
+                 background=[('active', config.COLORS['accent_hover'])],
+                 foreground=[('active', 'white')])
+        
+        # Accent button style
+        style.configure('Accent.TButton',
+                       background=config.COLORS['error'],
+                       foreground='white',
+                       padding=[20, 12],
+                       font=('Segoe UI', 10, 'bold'))
         
         style.configure('Header.TLabel',
                        font=('Segoe UI', 24, 'bold'),
-                       foreground=config.COLORS['accent'])
+                       foreground=config.COLORS['text_primary'],
+                       background=config.COLORS['bg_primary'])
+        
+        style.configure('Subheader.TLabel',
+                       font=('Segoe UI', 11),
+                       foreground=config.COLORS['text_secondary'],
+                       background=config.COLORS['bg_primary'])
         
         style.configure('Status.TLabel',
                        font=('Segoe UI', 10),
-                       foreground=config.COLORS['text_secondary'])
+                       foreground=config.COLORS['text_secondary'],
+                       background=config.COLORS['bg_primary'])
+        
+        style.configure('Info.TLabel',
+                       font=('Segoe UI', 10),
+                       foreground=config.COLORS['text_secondary'],
+                       background=config.COLORS['bg_secondary'],
+                       padding=[15, 10])
+        
+        style.configure('Card.TFrame',
+                       background=config.COLORS['card_bg'],
+                       relief='flat',
+                       borderwidth=1)
     
     def _build_ui(self):
         """Build the main UI layout."""
         # Main container
-        main_container = ttk.Frame(self.root, padding="10")
+        main_container = ttk.Frame(self.root, padding="15")
         main_container.pack(fill=tk.BOTH, expand=True)
         
-        # Header
-        header = ttk.Label(main_container, 
+        # Header Section
+        header_frame = ttk.Frame(main_container)
+        header_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        header = ttk.Label(header_frame, 
                           text="ISL Translation System",
                           style='Header.TLabel')
-        header.pack(pady=(0, 10))
+        header.pack()
+        
+        subheader = ttk.Label(header_frame,
+                             text="Bidirectional Indian Sign Language Translation",
+                             style='Subheader.TLabel')
+        subheader.pack(pady=(5, 0))
         
         # Tab notebook
         self.notebook = ttk.Notebook(main_container)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
         # Create tabs
         self._create_text_to_isl_tab()
@@ -184,31 +233,53 @@ class ISLTranslatorApp:
         self._create_isl_to_speech_tab()
         
         # Status bar
-        self.status_var = tk.StringVar(value="Initializing...")
-        status_bar = ttk.Label(main_container, 
+        status_frame = ttk.Frame(main_container)
+        status_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        self.status_var = tk.StringVar(value="Ready")
+        status_bar = ttk.Label(status_frame, 
                               textvariable=self.status_var,
                               style='Status.TLabel')
-        status_bar.pack(pady=(10, 0))
+        status_bar.pack(side=tk.LEFT)
+        
+        # Version label
+        version_label = ttk.Label(status_frame,
+                                 text="v1.0 | Professional Edition",
+                                 style='Status.TLabel')
+        version_label.pack(side=tk.RIGHT)
     
     def _create_text_to_isl_tab(self):
         """Create the Text → ISL tab."""
         tab = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(tab, text="Text → ISL")
+        self.notebook.add(tab, text="◉ Text → ISL")
+        
+        # Instructions card
+        info_card = ttk.Frame(tab, style='Card.TFrame')
+        info_card.pack(fill=tk.X, pady=(0, 15))
+        
+        info = ttk.Label(info_card,
+                        text="ⓘ Type text below and press Enter or click Translate to see ISL signs\n" +
+                             "Supports letters A-Z and numbers 1-9",
+                        style='Info.TLabel',
+                        justify=tk.CENTER)
+        info.pack(padx=20, pady=15)
         
         # Input section
         input_frame = ttk.Frame(tab)
-        input_frame.pack(fill=tk.X, pady=(0, 20))
+        input_frame.pack(fill=tk.X, pady=(0, 15))
         
-        ttk.Label(input_frame, text="Enter text to translate:").pack(anchor=tk.W)
+        ttk.Label(input_frame, 
+                 text="Enter text to translate:",
+                 font=('Segoe UI', 11, 'bold')).pack(anchor=tk.W, pady=(0, 8))
         
         input_row = ttk.Frame(input_frame)
-        input_row.pack(fill=tk.X, pady=(5, 0))
+        input_row.pack(fill=tk.X)
         
-        self.text_input = ttk.Entry(input_row, width=50, font=('Segoe UI', 14))
+        self.text_input = ttk.Entry(input_row, width=60, font=('Segoe UI', 12))
         self.text_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         self.text_input.bind('<Return>', lambda e: self._translate_text())
         
-        translate_btn = ttk.Button(input_row, text="Translate", 
+        translate_btn = ttk.Button(input_row, text="→ Translate", 
                                   command=self._translate_text)
         translate_btn.pack(side=tk.LEFT)
         
@@ -218,148 +289,195 @@ class ISLTranslatorApp:
         
         # Current sign display
         self.current_sign_label = ttk.Label(display_frame, 
-                                           text="Enter text above",
-                                           font=('Segoe UI', 18))
-        self.current_sign_label.pack(pady=10)
+                                           text="Sign will appear here",
+                                           font=('Segoe UI', 16, 'bold'),
+                                           foreground=config.COLORS['accent'])
+        self.current_sign_label.pack(pady=(0, 10))
         
-        # Image canvas
-        self.sign_canvas = tk.Canvas(display_frame,
-                                    width=300, height=300,
-                                    bg='white',
-                                    highlightthickness=2,
-                                    highlightbackground=config.COLORS['border'])
-        self.sign_canvas.pack(pady=10)
+        # Image canvas with modern styling
+        canvas_container = ttk.Frame(display_frame, style='Card.TFrame')
+        canvas_container.pack(pady=(0, 15))
+        
+        self.sign_canvas = tk.Canvas(canvas_container,
+                                    width=280, height=280,
+                                    bg=config.COLORS['bg_primary'],
+                                    highlightthickness=3,
+                                    highlightbackground=config.COLORS['accent'])
+        self.sign_canvas.pack(padx=10, pady=10)
         
         # Sign grid (thumbnails)
         self.sign_grid_frame = ttk.Frame(display_frame)
-        self.sign_grid_frame.pack(fill=tk.X, pady=10)
+        self.sign_grid_frame.pack(fill=tk.X, pady=(0, 20))
         
         # Controls
         control_frame = ttk.Frame(display_frame)
         control_frame.pack(pady=10)
         
-        self.prev_btn = ttk.Button(control_frame, text="← Previous",
+        self.prev_btn = ttk.Button(control_frame, text="◀ Previous",
                                   command=self._prev_sign)
-        self.prev_btn.pack(side=tk.LEFT, padx=5)
+        self.prev_btn.pack(side=tk.LEFT, padx=8)
         
-        self.play_btn = ttk.Button(control_frame, text="▶ Play",
+        self.play_btn = ttk.Button(control_frame, text="▶ Play All",
                                   command=self._toggle_play)
-        self.play_btn.pack(side=tk.LEFT, padx=5)
+        self.play_btn.pack(side=tk.LEFT, padx=8)
         
-        self.next_btn = ttk.Button(control_frame, text="Next →",
+        self.next_btn = ttk.Button(control_frame, text="Next ▶",
                                   command=self._next_sign)
-        self.next_btn.pack(side=tk.LEFT, padx=5)
+        self.next_btn.pack(side=tk.LEFT, padx=8)
         
         # Speak button
-        speak_btn = ttk.Button(control_frame, text="🔊 Speak",
+        speak_btn = ttk.Button(control_frame, text="♪ Speak Text",
                               command=self._speak_text)
-        speak_btn.pack(side=tk.LEFT, padx=20)
+        speak_btn.pack(side=tk.LEFT, padx=25)
     
     def _create_speech_to_isl_tab(self):
         """Create the Speech → ISL tab."""
         tab = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(tab, text="Speech → ISL")
+        self.notebook.add(tab, text="♫ Speech → ISL")
         
-        # Info
-        info = ttk.Label(tab, 
-                        text="Click 'Record' and speak. Your speech will be converted to ISL signs.",
-                        font=('Segoe UI', 12))
-        info.pack(pady=20)
+        # Instructions card
+        info_card = ttk.Frame(tab, style='Card.TFrame')
+        info_card.pack(fill=tk.X, pady=(0, 20))
         
-        # Record button
-        self.record_btn = ttk.Button(tab, text="🎤 Record (5 seconds)",
+        info = ttk.Label(info_card,
+                        text="ⓘ Click the Record button and speak clearly for 5 seconds\n" +
+                             "Your speech will be transcribed and converted to ISL signs\n" +
+                             "Make sure your microphone is enabled",
+                        style='Info.TLabel',
+                        justify=tk.CENTER)
+        info.pack(padx=20, pady=15)
+        
+        # Record button section
+        record_frame = ttk.Frame(tab)
+        record_frame.pack(pady=(0, 25))
+        
+        self.record_btn = ttk.Button(record_frame, text="● Start Recording (5 sec)",
                                     command=self._start_recording)
-        self.record_btn.pack(pady=10)
+        self.record_btn.pack()
         
-        # Recognized text
-        self.speech_text_var = tk.StringVar(value="Recognized text will appear here")
-        speech_label = ttk.Label(tab, 
+        # Recognized text display
+        text_card = ttk.Frame(tab, style='Card.TFrame')
+        text_card.pack(fill=tk.X, pady=(0, 25))
+        
+        ttk.Label(text_card,
+                 text="Recognized Speech:",
+                 font=('Segoe UI', 12, 'bold')).pack(anchor=tk.W, padx=20, pady=(15, 5))
+        
+        self.speech_text_var = tk.StringVar(value="Click 'Start Recording' to begin...")
+        speech_label = ttk.Label(text_card, 
                                 textvariable=self.speech_text_var,
-                                font=('Segoe UI', 14),
-                                wraplength=600)
-        speech_label.pack(pady=20)
+                                font=('Segoe UI', 12),
+                                foreground=config.COLORS['accent'],
+                                wraplength=700)
+        speech_label.pack(anchor=tk.W, padx=20, pady=(0, 15))
         
-        # Sign display (reuses similar layout)
-        self.speech_sign_canvas = tk.Canvas(tab,
-                                           width=300, height=300,
-                                           bg='white',
-                                           highlightthickness=2,
-                                           highlightbackground=config.COLORS['border'])
-        self.speech_sign_canvas.pack(pady=10)
+        # Sign display section
+        display_label = ttk.Label(tab,
+                                 text="ISL Sign Translation:",
+                                 font=('Segoe UI', 13, 'bold'))
+        display_label.pack(pady=(0, 15))
+        
+        canvas_container = ttk.Frame(tab, style='Card.TFrame')
+        canvas_container.pack(pady=(0, 15))
+        
+        self.speech_sign_canvas = tk.Canvas(canvas_container,
+                                           width=280, height=280,
+                                           bg=config.COLORS['bg_primary'],
+                                           highlightthickness=3,
+                                           highlightbackground=config.COLORS['accent'])
+        self.speech_sign_canvas.pack(padx=10, pady=10)
         
         # Sign sequence display
         self.speech_sign_grid = ttk.Frame(tab)
-        self.speech_sign_grid.pack(fill=tk.X, pady=10)
+        self.speech_sign_grid.pack(fill=tk.X, pady=(0, 10))
     
     def _create_isl_to_speech_tab(self):
         """Create the ISL → Speech tab."""
         tab = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(tab, text="ISL → Speech")
+        self.notebook.add(tab, text="◉ ISL → Speech")
         
-        # Info
-        info = ttk.Label(tab,
-                        text="Show hand signs to the camera. Recognized signs will be spoken.",
-                        font=('Segoe UI', 12))
-        info.pack(pady=10)
+        # Instructions card
+        info_card = ttk.Frame(tab, style='Card.TFrame')
+        info_card.pack(fill=tk.X, pady=(0, 20))
+        
+        info = ttk.Label(info_card,
+                        text="ⓘ Show hand signs to your camera (letters A-Z, numbers 1-9)\n" +
+                             "Hold each sign steady for recognition | Use buttons below to manage detected text\n" +
+                             "Press Space to add spaces between words | Click Speak to hear the word",
+                        style='Info.TLabel',
+                        justify=tk.CENTER)
+        info.pack(padx=20, pady=15)
         
         # Controls Frame (Top)
         control_frame = ttk.Frame(tab)
-        control_frame.pack(pady=(0, 10))
+        control_frame.pack(pady=(0, 15))
         
-        self.camera_btn = ttk.Button(control_frame, text="📷 Start Camera",
+        self.camera_btn = ttk.Button(control_frame, text="◉ Start Camera",
                                     command=self._toggle_camera)
-        self.camera_btn.pack(side=tk.LEFT, padx=5)
+        self.camera_btn.pack(side=tk.LEFT, padx=8)
         
-        clear_btn = ttk.Button(control_frame, text="Clear",
+        clear_btn = ttk.Button(control_frame, text="✕ Clear Text",
                               command=self._clear_camera_word)
-        clear_btn.pack(side=tk.LEFT, padx=5)
+        clear_btn.pack(side=tk.LEFT, padx=8)
         
-        speak_word_btn = ttk.Button(control_frame, text="🔊 Speak Word",
+        speak_word_btn = ttk.Button(control_frame, text="♪ Speak Word",
                                    command=self._speak_camera_word)
-        speak_word_btn.pack(side=tk.LEFT, padx=5)
+        speak_word_btn.pack(side=tk.LEFT, padx=8)
         
         # Add Space button
-        space_btn = ttk.Button(control_frame, text="␣ Space",
+        space_btn = ttk.Button(control_frame, text="[ ] Add Space",
                               command=self._add_space_to_word)
-        space_btn.pack(side=tk.LEFT, padx=5)
+        space_btn.pack(side=tk.LEFT, padx=8)
+        
+        # Add Exit button
+        exit_btn = ttk.Button(control_frame, text="✕ Exit App",
+                             command=self._quit_app,
+                             style='Accent.TButton')
+        exit_btn.pack(side=tk.LEFT, padx=15)
 
         # Bind space key
         self.root.bind('<space>', self._add_space_to_word)
 
-        # Status
-        self.camera_status_var = tk.StringVar(value="Camera off")
-        camera_status = ttk.Label(control_frame,
+        # Status bar
+        status_frame = ttk.Frame(tab)
+        status_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        self.camera_status_var = tk.StringVar(value="Camera: OFF")
+        camera_status = ttk.Label(status_frame,
                                  textvariable=self.camera_status_var,
-                                 style='Status.TLabel')
-        camera_status.pack(side=tk.LEFT, padx=20)
+                                 font=('Segoe UI', 11, 'bold'),
+                                 foreground=config.COLORS['warning'])
+        camera_status.pack(side=tk.LEFT)
 
-        # Camera frame
-        camera_container = ttk.Frame(tab)
-        camera_container.pack(fill=tk.BOTH, expand=True)
+        # Camera frame with professional border
+        camera_container = ttk.Frame(tab, style='Card.TFrame')
+        camera_container.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        # Reduced canvas size to fit screen (4:3 aspect ratio)
+        # Square canvas for better visibility
         self.camera_canvas = tk.Canvas(camera_container,
-                                       width=480, height=360,
-                                       bg='black',
-                                       highlightthickness=2,
-                                       highlightbackground=config.COLORS['border'])
-        self.camera_canvas.pack(pady=5)
+                                       width=640, height=640,
+                                       bg=config.COLORS['camera_bg'],
+                                       highlightthickness=3,
+                                       highlightbackground=config.COLORS['accent'])
+        self.camera_canvas.pack(padx=10, pady=10)
         
-        # Recognition info
-        info_frame = ttk.Frame(camera_container)
-        info_frame.pack(fill=tk.X, pady=5)
+        # Detected text display with card styling
+        detected_card = ttk.Frame(tab, style='Card.TFrame')
+        detected_card.pack(fill=tk.X, pady=(10, 0))
         
-        self.gesture_var = tk.StringVar(value="Show hand signs to detect letters")
-        gesture_label = ttk.Label(info_frame,
-                                 textvariable=self.gesture_var,
-                                 font=('Segoe UI', 16, 'bold'))
-        gesture_label.pack()
+        detected_frame = ttk.Frame(detected_card)
+        detected_frame.pack(fill=tk.X, padx=20, pady=15)
         
-        self.word_var = tk.StringVar(value="")
-        word_label = ttk.Label(info_frame,
-                              textvariable=self.word_var,
-                              font=('Segoe UI', 14))
-        word_label.pack()
+        ttk.Label(detected_frame, 
+                 text="Detected Text:", 
+                 font=('Segoe UI', 13, 'bold')).pack(side=tk.LEFT, padx=(0, 15))
+        
+        self.detected_text_var = tk.StringVar(value="(No text yet)")
+        detected_label = ttk.Label(detected_frame,
+                                  textvariable=self.detected_text_var,
+                                  font=('Segoe UI', 15, 'bold'),
+                                  foreground=config.COLORS['accent'])
+        detected_label.pack(side=tk.LEFT)
     
     def _init_pipelines_async(self):
         """Initialize pipelines in background thread."""
@@ -645,7 +763,7 @@ class ISLTranslatorApp:
 
         if self._detected_word and not self._detected_word.endswith(" "):
             self._detected_word += " "
-            self.word_var.set(f"Word: {self._detected_word.upper()}")
+            self.detected_text_var.set(self._detected_word.upper())
     
     def _toggle_camera(self):
         """Toggle camera for ISL → Speech."""
@@ -710,7 +828,7 @@ class ISLTranslatorApp:
         
         self.is_camera_running = True
         self.camera_btn.config(text="⏹ Stop Camera")
-        self.camera_status_var.set("Camera running - show hand signs!")
+        self.camera_status_var.set("Camera: ACTIVE - Show hand signs!")
         
         # Start camera loop
         self._camera_loop()
@@ -723,63 +841,68 @@ class ISLTranslatorApp:
         ret, frame = self.camera.read()
         
         if ret:
+            # Increment frame counter
+            self._frame_count += 1
+            
             # Flip for mirror effect
             frame = cv2.flip(frame, 1)
             
             # Convert to RGB for MediaPipe
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Create MediaPipe Image and detect
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-            detection_result = self.hand_landmarker.detect(mp_image)
-            
             detected_letter = None
             confidence = 0.0
             
-            if detection_result.hand_landmarks:
-                for hand_landmarks in detection_result.hand_landmarks:
-                    # Draw landmarks on frame
-                    self._draw_hand_landmarks(rgb_frame, hand_landmarks)
-                    
-                    if isl_model is not None:
-                        # ML Model Prediction
-                        landmark_list = self._calc_landmark_list(rgb_frame, hand_landmarks)
-                        processed_landmarks = self._pre_process_landmarks(landmark_list)
+            # Only run detection every N frames to reduce lag
+            if self._frame_count % (self._prediction_skip + 1) == 0:
+                # Create MediaPipe Image and detect
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                detection_result = self.hand_landmarker.detect(mp_image)
+                
+                if detection_result.hand_landmarks:
+                    for hand_landmarks in detection_result.hand_landmarks:
+                        # Draw landmarks on frame
+                        self._draw_hand_landmarks(rgb_frame, hand_landmarks)
                         
-                        import pandas as pd
-                        df = pd.DataFrame(processed_landmarks).transpose()
-                        predictions = isl_model.predict(df, verbose=0)
-                        predicted_class = np.argmax(predictions, axis=1)
-                        confidence = float(np.max(predictions))
-                        
-                        if len(predicted_class) > 0 and confidence > 0.5:
-                            detected_letter = ISL_ALPHABET[predicted_class[0]]
-                    else:
-                        # Fallback Rule-Based Prediction
-                        # Need landmarks in wrist-relative format expected by heuristic
-                        try:
-                            landmarks = self._extract_landmarks(hand_landmarks)
-                            detected_letter, confidence = self._predict_letter(landmarks)
-                        except Exception as e:
-                            logger.error(f"Heuristic prediction error: {e}")
+                        if isl_model is not None:
+                            # ML Model Prediction
+                            landmark_list = self._calc_landmark_list(rgb_frame, hand_landmarks)
+                            processed_landmarks = self._pre_process_landmarks(landmark_list)
+                            
+                            import pandas as pd
+                            df = pd.DataFrame(processed_landmarks).transpose()
+                            predictions = isl_model.predict(df, verbose=0)
+                            predicted_class = np.argmax(predictions, axis=1)
+                            confidence = float(np.max(predictions))
+                            
+                            # Higher threshold to prevent false detections
+                            if len(predicted_class) > 0 and confidence > 0.65:
+                                detected_letter = ISL_ALPHABET[predicted_class[0]]
+                        else:
+                            # Fallback Rule-Based Prediction
+                            try:
+                                landmarks = self._extract_landmarks(hand_landmarks)
+                                detected_letter, confidence = self._predict_letter(landmarks)
+                            except Exception as e:
+                                logger.error(f"Heuristic prediction error: {e}")
+                
+                # Update detection state
+                self._process_detection(detected_letter, confidence)
             
-            # Update detection state
-            self._process_detection(detected_letter, confidence)
-            
-            # Draw status on frame
+            # Draw status on frame (every frame for smooth display)
             self._draw_status(rgb_frame)
             
-            # Convert to PhotoImage
+            # Convert to PhotoImage (optimize resize)
             img = Image.fromarray(rgb_frame)
-            img = img.resize((640, 480), Image.Resampling.LANCZOS)
+            img = img.resize((640, 640), Image.Resampling.NEAREST)  # Match square canvas size
             photo = ImageTk.PhotoImage(img)
             
             self._camera_photo = photo
             self.camera_canvas.delete("all")
-            self.camera_canvas.create_image(320, 240, image=photo)
+            self.camera_canvas.create_image(320, 320, image=photo)  # Center in 640x640 canvas
         
-        # Schedule next update (33ms ~= 30fps)
-        self.root.after(33, self._camera_loop)
+        # Schedule next update - reduced to 16ms for smoother 60fps camera display
+        self.root.after(16, self._camera_loop)
     
     def _calc_landmark_list(self, image, landmarks):
         """Calculate landmark positions in pixel coordinates."""
@@ -934,7 +1057,7 @@ class ISLTranslatorApp:
                 
                 # Update current letter display
                 self._current_letter = detected
-                self.gesture_var.set(f"Detected: {detected.upper()}")
+                # Display detected letter (removed old gesture_var)
                 
                 # Debounce: require consistent detection
                 if detected == self._last_letter:
@@ -946,7 +1069,7 @@ class ISLTranslatorApp:
                 # Add to word after holding
                 if self._letter_hold_count >= self._debounce_threshold:
                     self._detected_word += detected
-                    self.word_var.set(f"Word: {self._detected_word.upper()}")
+                    self.detected_text_var.set(self._detected_word.upper())
                     
                     # Speak the letter
                     if self.tts and PYTTSX3_AVAILABLE:
@@ -959,8 +1082,6 @@ class ISLTranslatorApp:
             # Decay hold count if nothing detected
             if self._letter_hold_count > 0:
                 self._letter_hold_count -= 1
-            if self._letter_hold_count == 0:
-                self.gesture_var.set("Show hand sign...")
     
     def _draw_status(self, frame: np.ndarray):
         """Draw detection status on frame."""
@@ -993,7 +1114,7 @@ class ISLTranslatorApp:
             self.hand_landmarker = None
         
         self.camera_btn.config(text="📷 Start Camera")
-        self.camera_status_var.set("Camera off")
+        self.camera_status_var.set("Camera: OFF")
         self.camera_canvas.delete("all")
     
     def _clear_camera_word(self):
@@ -1002,8 +1123,7 @@ class ISLTranslatorApp:
         self._current_letter = ""
         self._prediction_buffer = []
         self._letter_hold_count = 0
-        self.word_var.set("")
-        self.gesture_var.set("Show hand sign...")
+        self.detected_text_var.set("(No text yet)")
     
     def _speak_camera_word(self):
         """Speak the recognized word."""
@@ -1020,6 +1140,10 @@ class ISLTranslatorApp:
             self.tts.shutdown()
         
         self.root.destroy()
+    
+    def _quit_app(self):
+        """Exit button handler - same as close."""
+        self._on_close()
     
     def run(self):
         """Start the application."""

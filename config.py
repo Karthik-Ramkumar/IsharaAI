@@ -65,16 +65,21 @@ ACCENT_COLOR = "#3498DB"
 SUCCESS_COLOR = "#27AE60"
 ERROR_COLOR = "#E74C3C"
 
-# UI Colors Dictionary (for Tkinter app)
+# UI Colors Dictionary (for Tkinter app) - Modern Professional Palette
 COLORS = {
-    'bg_primary': '#2C3E50',
-    'bg_secondary': '#34495E',
-    'text_primary': '#ECF0F1',
-    'text_secondary': '#BDC3C7',
-    'accent': '#3498DB',
-    'success': '#27AE60',
-    'error': '#E74C3C',
-    'border': '#7F8C8D'
+    'bg_primary': '#0F172A',      # Deep navy - main background
+    'bg_secondary': '#1E293B',    # Slightly lighter navy - cards
+    'bg_tertiary': '#334155',     # Medium slate - hover states
+    'text_primary': '#F8FAFC',    # Almost white - main text
+    'text_secondary': '#94A3B8',  # Light slate - secondary text
+    'accent': '#06B6D4',          # Cyan - primary actions
+    'accent_hover': '#0891B2',    # Darker cyan - hover
+    'success': '#10B981',         # Emerald green - success
+    'error': '#EF4444',           # Red - errors
+    'warning': '#F59E0B',         # Amber - warnings
+    'border': '#475569',          # Slate - borders
+    'camera_bg': '#1E293B',       # Camera background
+    'card_bg': '#1E293B'          # Card background
 }
 
 # Display Settings
