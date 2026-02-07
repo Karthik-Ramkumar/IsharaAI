@@ -14,6 +14,9 @@ import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
+import queue
+import wave
+import tempfile
 from typing import Optional, Dict, List
 from PIL import Image, ImageTk
 import numpy as np
@@ -28,11 +31,37 @@ import config
 from src.pipelines.text_to_isl import TextToISLPipeline
 from src.pipelines.speech_to_isl import SpeechToISLPipeline
 from src.core.text_to_speech import TextToSpeech, PYTTSX3_AVAILABLE
+
 from src.utils.image_utils import ISLImageCache
 
 # Setup logging
 logging.basicConfig(level=config.LOG_LEVEL, format=config.LOG_FORMAT)
 logger = logging.getLogger(__name__)
+
+# Try to import Piper TTS (preferred)
+PIPER_AVAILABLE = False
+piper_voice = None
+try:
+    from piper import PiperVoice
+    PIPER_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "piper", "en_US-lessac-medium.onnx")
+    if os.path.exists(PIPER_MODEL_PATH):
+        piper_voice = PiperVoice.load(PIPER_MODEL_PATH)
+        PIPER_AVAILABLE = True
+        logger.info(f"Piper TTS loaded from {PIPER_MODEL_PATH}")
+    else:
+        logger.warning(f"Piper model not found at {PIPER_MODEL_PATH}")
+except ImportError as e:
+    logger.warning(f"Piper TTS not available: {e}")
+except Exception as e:
+    logger.warning(f"Error loading Piper TTS: {e}")
+
+# Try to import winsound for audio playback (Windows)
+WINSOUND_AVAILABLE = False
+try:
+    import winsound
+    WINSOUND_AVAILABLE = True
+except ImportError:
+    pass
 
 # Try to import OpenCV
 try:
@@ -97,7 +126,6 @@ class ISLTranslatorApp:
         # Initialize pipelines
         self.text_to_isl = None
         self.speech_to_isl = None
-        self.tts = None
         self.image_cache = None
         
         # State variables
@@ -130,6 +158,99 @@ class ISLTranslatorApp:
         
         # Bind close event
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # ── Persistent TTS thread (single engine, proper COM) ─────
+        self._tts_queue = queue.Queue()
+        self._tts_alive = True
+        self._tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
+        self._tts_thread.start()
+
+        # ── Dedicated ISL → Speech TTS (fresh engine per utterance) ───
+        self._isl_tts_queue = queue.Queue()
+        self._isl_tts_alive = True
+        self._isl_tts_thread = threading.Thread(target=self._isl_tts_worker, daemon=True)
+        self._isl_tts_thread.start()
+
+    def _tts_worker(self):
+        """Background thread for TTS output using Piper (or pyttsx3 fallback)."""
+        while self._tts_alive:
+            try:
+                text = self._tts_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if text is None:  # shutdown sentinel
+                break
+
+            self._speak_with_piper(text)
+
+    def _isl_tts_worker(self):
+        """Dedicated TTS worker for the ISL → Speech tab using Piper."""
+        while self._isl_tts_alive:
+            try:
+                text = self._isl_tts_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if text is None:  # shutdown sentinel
+                break
+
+            self._speak_with_piper(text)
+
+    def _speak_with_piper(self, text: str) -> None:
+        """Synthesize and play speech using Piper TTS (or pyttsx3 fallback)."""
+        if not text:
+            return
+
+        # Use Piper TTS if available
+        if PIPER_AVAILABLE and piper_voice is not None:
+            try:
+                # Create a temporary WAV file
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                    with wave.open(tmp_file, "wb") as wav_file:
+                        piper_voice.synthesize(text, wav_file)
+
+                # Play the audio file
+                if WINSOUND_AVAILABLE:
+                    winsound.PlaySound(tmp_path, winsound.SND_FILENAME)
+                else:
+                    # Fallback: try to play with system command
+                    import subprocess
+                    subprocess.run(["powershell", "-c", f"(New-Object Media.SoundPlayer '{tmp_path}').PlaySync()"], 
+                                   capture_output=True, timeout=10)
+
+                # Clean up temp file
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+                return  # Success with Piper
+            except Exception as e:
+                logger.error(f"Piper TTS error: {e}")
+                # Fall through to pyttsx3 fallback
+
+        # Fallback to pyttsx3 if Piper fails or unavailable
+        if PYTTSX3_AVAILABLE:
+            try:
+                import pyttsx3
+                engine = pyttsx3.init()
+                engine.setProperty('rate', config.SPEECH_RATE)
+                engine.setProperty('volume', config.SPEECH_VOLUME)
+                engine.say(text)
+                engine.runAndWait()
+                try:
+                    engine.stop()
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"pyttsx3 fallback error: {e}")
+
+    def _speak_direct(self, text: str) -> None:
+        """Queue text for the persistent TTS worker thread (Text → ISL tab)."""
+        if text:
+            self._tts_queue.put(text)
     
     def _setup_styles(self):
         """Configure ttk styles for a modern look."""
@@ -319,12 +440,20 @@ class ISLTranslatorApp:
         speak_word_btn.pack(side=tk.LEFT, padx=5)
         
         # Add Space button
-        space_btn = ttk.Button(control_frame, text="␣ Space",
+        space_btn = ttk.Button(control_frame, text="[S] Space",
                               command=self._add_space_to_word)
         space_btn.pack(side=tk.LEFT, padx=5)
 
-        # Bind space key
-        self.root.bind('<space>', self._add_space_to_word)
+        # Add Backspace button
+        backspace_btn = ttk.Button(control_frame, text="[B] Backspace",
+                                  command=self._backspace_word)
+        backspace_btn.pack(side=tk.LEFT, padx=5)
+
+        # Bind S key for space, B key for backspace
+        self.root.bind('<s>', self._add_space_to_word)
+        self.root.bind('<S>', self._add_space_to_word)
+        self.root.bind('<b>', self._backspace_word_event)
+        self.root.bind('<B>', self._backspace_word_event)
 
         # Status
         self.camera_status_var = tk.StringVar(value="Camera off")
@@ -368,10 +497,6 @@ class ISLTranslatorApp:
                 # Text to ISL
                 self.status_var.set("Loading image cache...")
                 self.text_to_isl = TextToISLPipeline()
-                
-                # TTS
-                if PYTTSX3_AVAILABLE:
-                    self.tts = TextToSpeech()
                 
                 # Image cache for direct use
                 self.image_cache = ISLImageCache(
@@ -515,8 +640,8 @@ class ISLTranslatorApp:
     def _speak_text(self):
         """Speak the current text."""
         text = self.text_input.get().strip()
-        if text and self.tts:
-            self.tts.speak_async(text)
+        if text:
+            self._speak_direct(text)
     
     def _start_recording(self):
         """Start speech recording."""
@@ -531,7 +656,7 @@ class ISLTranslatorApp:
         def record():
             try:
                 # Initialize speech recognizer if needed
-                from src.core.speech_recognition import create_recognizer, SpeechRecognizer
+                from src.core.speech_recognition import create_recognizer
                 recognizer = create_recognizer()
                 
                 # Force re-check availability if needed
@@ -551,26 +676,31 @@ class ISLTranslatorApp:
                     
                     # Translate to ISL
                     if self.text_to_isl:
-                        signs = self.text_to_isl.translate(text)
-                        
-                        if signs:
-                            # Store for display
-                            self._speech_signs = signs
-                            self._speech_sign_index = 0
+                        try:
+                            detected_signs = self.text_to_isl.translate(text)
                             
-                            # Update display on main thread
-                            self.root.after(0, self._update_speech_signs_display)
-                            
-                            # Auto-play the signs
-                            self.root.after(500, self._play_speech_signs)
-                        else:
-                            self.root.after(0, lambda: self.speech_text_var.set(f"Recognized: \"{text}\" (no translatable characters)"))
+                            if detected_signs:
+                                # Store for display
+                                self._speech_signs = detected_signs
+                                self._speech_sign_index = 0
+                                
+                                # Update display on main thread
+                                self.root.after(0, self._update_speech_signs_display)
+                                
+                                # Auto-play the signs
+                                self.root.after(500, self._play_speech_signs)
+                            else:
+                                self.root.after(0, lambda: self.speech_text_var.set(f"Recognized: \"{text}\" (no translatable characters)"))
+                        except Exception as translation_err:
+                            logger.error(f"Translation error: {translation_err}")
+                            self.root.after(0, lambda: self.speech_text_var.set(f"Translation Error: {translation_err}"))
                 else:
                     self.root.after(0, lambda: self.speech_text_var.set("No speech detected. Try again."))
                     
             except Exception as e:
-                logger.error(f"Recording error: {e}")
-                self.root.after(0, lambda: self.speech_text_var.set(f"Error: {e}"))
+                error_msg = str(e)
+                logger.error(f"Recording error: {error_msg}")
+                self.root.after(0, lambda msg=error_msg: self.speech_text_var.set(f"Error: {msg}"))
             finally:
                 self.root.after(0, lambda: self.record_btn.config(state=tk.NORMAL))
         
@@ -638,7 +768,7 @@ class ISLTranslatorApp:
         # Check if ISL -> Speech tab is active
         try:
             current_tab = self.notebook.index("current")
-            if current_tab != 2:  # Assuming ISL -> Speech is the 3rd tab
+            if current_tab != 2:
                 return
         except tk.TclError:
             return
@@ -646,6 +776,31 @@ class ISLTranslatorApp:
         if self._detected_word and not self._detected_word.endswith(" "):
             self._detected_word += " "
             self.word_var.set(f"Word: {self._detected_word.upper()}")
+
+        if event:
+            return "break"
+
+    def _backspace_word_event(self, event=None):
+        """Key-event wrapper for backspace."""
+        self._backspace_word()
+        if event:
+            return "break"
+
+    def _backspace_word(self):
+        """Remove the last character from the detected word."""
+        try:
+            current_tab = self.notebook.index("current")
+            if current_tab != 2:
+                return
+        except tk.TclError:
+            return
+
+        if self._detected_word:
+            self._detected_word = self._detected_word[:-1]
+            if self._detected_word:
+                self.word_var.set(f"Word: {self._detected_word.upper()}")
+            else:
+                self.word_var.set("")
     
     def _toggle_camera(self):
         """Toggle camera for ISL → Speech."""
@@ -674,7 +829,11 @@ class ISLTranslatorApp:
                               "Using basic rule-based gesture detection instead.\n"
                               "For full ML model, please use Python 3.9-3.11.")
         
-        self.camera = cv2.VideoCapture(0)
+        self.camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        
+        if not self.camera.isOpened():
+            # Fallback to default backend
+            self.camera = cv2.VideoCapture(0)
         
         if not self.camera.isOpened():
             messagebox.showerror("Error", "Could not open camera")
@@ -771,12 +930,12 @@ class ISLTranslatorApp:
             
             # Convert to PhotoImage
             img = Image.fromarray(rgb_frame)
-            img = img.resize((640, 480), Image.Resampling.LANCZOS)
+            img = img.resize((480, 360), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             
             self._camera_photo = photo
             self.camera_canvas.delete("all")
-            self.camera_canvas.create_image(320, 240, image=photo)
+            self.camera_canvas.create_image(240, 180, image=photo)
         
         # Schedule next update (33ms ~= 30fps)
         self.root.after(33, self._camera_loop)
@@ -844,13 +1003,14 @@ class ISLTranslatorApp:
             cv2.circle(image, (cx, cy), 2, (255, 255, 255), -1)
     
     def _extract_landmarks(self, hand_landmarks) -> np.ndarray:
-        """Extract and normalize hand landmarks."""
+        """Extract and normalize hand landmarks (MediaPipe Tasks API)."""
         landmarks = []
         
         # Get wrist position for normalization
-        wrist = hand_landmarks.landmark[0]
+        # Tasks API: hand_landmarks is already a list of NormalizedLandmark
+        wrist = hand_landmarks[0]
         
-        for lm in hand_landmarks.landmark:
+        for lm in hand_landmarks:
             # Normalize relative to wrist
             landmarks.extend([
                 lm.x - wrist.x,
@@ -948,9 +1108,8 @@ class ISLTranslatorApp:
                     self._detected_word += detected
                     self.word_var.set(f"Word: {self._detected_word.upper()}")
                     
-                    # Speak the letter
-                    if self.tts and PYTTSX3_AVAILABLE:
-                        self.tts.speak_async(detected)
+                    # Speak the letter via dedicated ISL TTS
+                    self._isl_tts_queue.put(detected.upper())
                     
                     # Reset
                     self._letter_hold_count = 0
@@ -1006,19 +1165,37 @@ class ISLTranslatorApp:
         self.gesture_var.set("Show hand sign...")
     
     def _speak_camera_word(self):
-        """Speak the recognized word."""
-        word = self._detected_word
-        if word and self.tts:
-            self.tts.speak_async(word)
+        """Speak the full accumulated word/sentence via the ISL TTS worker."""
+        word = self._detected_word.strip()
+        if not word:
+            self.camera_status_var.set("No word to speak — detect signs first")
+            return
+
+        self.camera_status_var.set(f"Speaking: {word}")
+
+        # Drain any pending single-letter speaks so they don't overlap
+        while not self._isl_tts_queue.empty():
+            try:
+                self._isl_tts_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        # Queue the full word for the dedicated ISL TTS worker
+        self._isl_tts_queue.put(word)
     
     def _on_close(self):
         """Handle window close."""
         self.is_playing = False
         self._stop_camera()
-        
-        if self.tts:
-            self.tts.shutdown()
-        
+
+        # Shut down persistent TTS worker
+        self._tts_alive = False
+        self._tts_queue.put(None)  # sentinel to unblock the thread
+
+        # Shut down ISL TTS worker
+        self._isl_tts_alive = False
+        self._isl_tts_queue.put(None)
+
         self.root.destroy()
     
     def run(self):

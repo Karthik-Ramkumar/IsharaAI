@@ -12,3 +12,8 @@ venv.bak/
 .DS_Store
 crash_log.txt
 *.log
+
+# Exclude large data directories
+data/raw/
+data/processed/
+models/piper/*.onnx

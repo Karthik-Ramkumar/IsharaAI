@@ -150,7 +150,17 @@ class TextToSpeech:
     
     def _worker_loop(self) -> None:
         """Background worker that processes speech queue."""
+        # Initialize COM for this thread (required by pyttsx3/SAPI on Windows)
+        _com_initialized = False
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            _com_initialized = True
+        except (ImportError, Exception):
+            pass
+
         # Create a new engine for this thread
+        engine = None
         try:
             engine = pyttsx3.init()
             engine.setProperty('rate', self.rate)
@@ -176,9 +186,27 @@ class TextToSpeech:
                 
             except queue.Empty:
                 continue
+            except RuntimeError:
+                # Engine may be in bad state, reinitialize
+                logger.warning("TTS engine RuntimeError — reinitializing")
+                try:
+                    engine = pyttsx3.init()
+                    engine.setProperty('rate', self.rate)
+                    engine.setProperty('volume', self.volume)
+                except Exception:
+                    pass
+                self._is_speaking = False
             except Exception as e:
                 logger.error(f"Worker error: {e}")
                 self._is_speaking = False
+
+        # Clean up COM
+        if _com_initialized:
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
     
     def stop(self) -> None:
         """Stop current speech and clear queue."""
