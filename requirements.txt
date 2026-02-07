@@ -1,0 +1,16 @@
+tensorflow==2.15.0
+mediapipe==0.10.9
+opencv-python
+sounddevice
+numpy
+pandas
+pillow
+pyttsx3
+pypiwin32
+vosk
+srt
+tqdm
+tk
+phototk
+pyyaml
+scipy
