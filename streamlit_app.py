@@ -203,8 +203,11 @@ def main():
         with col1:
             st.subheader("Camera Feed")
             
+            # Check if camera is available (won't work on Streamlit Cloud)
+            st.info("ℹ️ **Note:** Live camera only works locally. On Streamlit Cloud, use snapshot mode below or download the desktop app.")
+            
             # Camera controls
-            run_camera = st.checkbox("Start Camera", value=False, key="camera_running")
+            run_camera = st.checkbox("Start Live Camera (Local Only)", value=False, key="camera_running")
             
             # Placeholder for camera feed
             camera_placeholder = st.empty()
@@ -258,7 +261,7 @@ def main():
                                 status_placeholder.info("Show a sign...")
                         
                         # Display frame
-                        camera_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
+                        camera_placeholder.image(frame_rgb, channels="RGB", width="stretch")
                         
                         frame_count += 1
                         time.sleep(0.033)  # ~30 fps
@@ -332,7 +335,7 @@ def main():
                             
                             if sign_path:
                                 with col:
-                                    st.image(str(sign_path), caption=sign, use_container_width=True)
+                                    st.image(str(sign_path), caption=sign, width="stretch")
                             else:
                                 with col:
                                     # Create placeholder
@@ -391,7 +394,7 @@ def main():
                             
                             if sign_path:
                                 with col:
-                                    st.image(str(sign_path), caption=sign, use_container_width=True)
+                                    st.image(str(sign_path), caption=sign, width="stretch")
                             else:
                                 with col:
                                     # Create placeholder
