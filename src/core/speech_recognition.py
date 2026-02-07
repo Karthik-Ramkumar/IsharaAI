@@ -120,6 +120,41 @@ class VoskRecognizerWithSounddevice:
             logger.warning(f"Audio status: {status}")
         self._audio_queue.put(bytes(indata))
     
+    def listen_continuously(self, callback: Callable, stop_event: threading.Event):
+        """
+        Record audio continuously until stop_event is set.
+        callback(text: str, is_final: bool)
+        """
+        if not self.is_available:
+            return
+
+        # Reset recognizer
+        self.recognizer = vosk.KaldiRecognizer(self.model, self.SAMPLE_RATE)
+        
+        try:
+            # Use RawInputStream for better control
+            with sd.RawInputStream(samplerate=self.SAMPLE_RATE, blocksize=4000,
+                                   dtype='int16', channels=1) as stream:
+                logger.info("Listening continuously...")
+                
+                while not stop_event.is_set():
+                    data, overflowed = stream.read(4000)
+                    if overflowed:
+                        logger.warning("Audio buffer overflow")
+                    
+                    if self.recognizer.AcceptWaveform(bytes(data)):
+                        result = json.loads(self.recognizer.Result())
+                        if result.get('text'):
+                            callback(result['text'], False)
+        
+        except Exception as e:
+            logger.error(f"Continuous listening error: {e}")
+        
+        # Final result
+        final = json.loads(self.recognizer.FinalResult())
+        if final.get('text'):
+            callback(final['text'], True)
+
     def recognize_from_microphone(self, duration: int = 5,
                                   callback: Optional[Callable] = None) -> str:
         """Record and recognize speech."""

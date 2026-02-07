@@ -12,15 +12,8 @@ venv.bak/
 .DS_Store
 crash_log.txt
 *.log
-data/
 
-# Large model files (download separately - see README)
-models/*.h5
-models/*.task
-models/vosk-model*/
-models/*.zip
-isl_github_model/model.h5
-isl_github_model/hand_landmarker.task
-isl_github_model/keypoint.csv
-isl_github_model/*.h5
-isl_github_model/*.task
+# Exclude large data directories
+data/raw/
+data/processed/
+models/piper/*.onnx
