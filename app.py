@@ -531,7 +531,7 @@ class ISLTranslatorApp:
         def record():
             try:
                 # Initialize speech recognizer if needed
-                from src.core.speech_recognition import create_recognizer, SpeechRecognizer
+                from src.core.speech_recognition import create_recognizer
                 recognizer = create_recognizer()
                 
                 # Force re-check availability if needed
