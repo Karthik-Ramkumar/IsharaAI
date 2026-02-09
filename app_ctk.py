@@ -29,7 +29,11 @@ import itertools
 import string
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(__file__))
+if getattr(sys, 'frozen', False):
+    _APP_DIR = sys._MEIPASS
+else:
+    _APP_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _APP_DIR)
 
 import config
 from src.pipelines.text_to_isl import TextToISLPipeline
@@ -47,7 +51,7 @@ PIPER_AVAILABLE = False
 piper_voice = None
 try:
     from piper import PiperVoice
-    PIPER_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "piper", "en_US-lessac-medium.onnx")
+    PIPER_MODEL_PATH = os.path.join(_APP_DIR, "models", "piper", "en_US-lessac-medium.onnx")
     if os.path.exists(PIPER_MODEL_PATH):
         piper_voice = PiperVoice.load(PIPER_MODEL_PATH)
         PIPER_AVAILABLE = True
@@ -91,7 +95,7 @@ try:
     from tensorflow import keras
     import pandas as pd
     
-    model_path = os.path.join(os.path.dirname(__file__), "models", "model.h5")
+    model_path = os.path.join(_APP_DIR, "models", "model.h5")
     if os.path.exists(model_path):
         isl_model = keras.models.load_model(model_path)
         KERAS_MODEL_AVAILABLE = True
@@ -540,7 +544,7 @@ class ISLTranslatorApp:
         scroll_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         try:
-            image_path = Path(__file__).parent / "allGestures.png"
+            image_path = Path(_APP_DIR) / "allGestures.png"
             if image_path.exists():
                 img = Image.open(image_path)
                 target_width = 900
@@ -883,7 +887,7 @@ class ISLTranslatorApp:
         
         # Load and display usecases.png
         try:
-            image_path = Path(__file__).parent / "usecases.png"
+            image_path = Path(_APP_DIR) / "usecases.png"
             if image_path.exists():
                 img = Image.open(image_path)
                 # Keep original aspect ratio, fit to panel width - larger size
@@ -923,7 +927,7 @@ class ISLTranslatorApp:
         # Initialize hand landmarker
         if not self.hosp_hand_landmarker and MEDIAPIPE_AVAILABLE:
             try:
-                model_path = Path(__file__).parent / "models" / "hand_landmarker.task"
+                model_path = Path(_APP_DIR) / "models" / "hand_landmarker.task"
                 options = vision.HandLandmarkerOptions(
                     base_options=python.BaseOptions(model_asset_path=str(model_path)),
                     running_mode=vision.RunningMode.IMAGE,
@@ -1307,7 +1311,7 @@ class ISLTranslatorApp:
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
         try:
-            hand_model_path = os.path.join(os.path.dirname(__file__), "models", "hand_landmarker.task")
+            hand_model_path = os.path.join(_APP_DIR, "models", "hand_landmarker.task")
             base_options = python.BaseOptions(model_asset_path=hand_model_path)
             options = vision.HandLandmarkerOptions(
                 base_options=base_options,
@@ -1550,7 +1554,7 @@ class ISLTranslatorApp:
                 return
             if self.hand_landmarker is None:
                 try:
-                    model_path = Path(__file__).parent / "models" / "hand_landmarker.task"
+                    model_path = Path(_APP_DIR) / "models" / "hand_landmarker.task"
                     if not model_path.exists():
                         self.trans_camera_status_var.set("Hand model not found")
                         return

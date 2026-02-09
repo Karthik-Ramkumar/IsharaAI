@@ -12,6 +12,6 @@ srt
 tqdm
 tk
 customtkinter>=5.2.0
-phototk
+
 pyyaml
 scipy

@@ -4,9 +4,18 @@ Author: Hackathon Team
 Date: 2026
 """
 import os
+import sys
 
 # Paths
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Paths
+if getattr(sys, 'frozen', False):
+    # If the application is run as a bundle, the PyInstaller bootloader
+    # extends the sys module by a flag frozen=True and sets the app 
+    # path into variable _MEIPASS'.
+    BASE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 RAW_DATA_DIR = os.path.join(DATA_DIR, 'raw', 'isl_images')
 PROCESSED_DATA_DIR = os.path.join(DATA_DIR, 'processed')

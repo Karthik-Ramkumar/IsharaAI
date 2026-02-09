@@ -44,7 +44,7 @@ PIPER_AVAILABLE = False
 piper_voice = None
 try:
     from piper import PiperVoice
-    PIPER_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "piper", "en_US-lessac-medium.onnx")
+    PIPER_MODEL_PATH = os.path.join(config.BASE_DIR, "models", "piper", "en_US-lessac-medium.onnx")
     if os.path.exists(PIPER_MODEL_PATH):
         piper_voice = PiperVoice.load(PIPER_MODEL_PATH)
         PIPER_AVAILABLE = True
@@ -92,7 +92,7 @@ try:
     import pandas as pd
     
     # Load the ISL classifier model
-    model_path = os.path.join(os.path.dirname(__file__), "models", "model.h5")
+    model_path = os.path.join(config.BASE_DIR, "models", "model.h5")
     if os.path.exists(model_path):
         isl_model = keras.models.load_model(model_path)
         KERAS_MODEL_AVAILABLE = True
@@ -571,7 +571,7 @@ class ISLTranslatorApp:
         scroll_container.pack(fill=tk.BOTH, expand=True)
         
         try:
-            image_path = Path(__file__).parent / "allGestures.png"
+            image_path = Path(config.BASE_DIR) / "allGestures.png"
             if image_path.exists():
                 img = Image.open(image_path)
                 
