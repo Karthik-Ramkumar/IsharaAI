@@ -12,7 +12,7 @@
 *   **🏥 Hospital Mode:** Specialized quick-access mode for medical emergencies, facilitating doctor-patient communication with predefined medical signs.
 *   **🧠 Intelligent Fallback:** Robust architecture that adapts to different Python environments for maximum compatibility.
 
-## 📸 Screenshots
+
 
 ### Gestures Reference
 ![Gestures Reference](images/gesture_table.png)
